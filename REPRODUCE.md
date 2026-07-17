@@ -20,7 +20,7 @@ restart recovery, and the pinned low-and-slow non-detection).
 - `case1-toxicity/inference-kotlin/TfidfSvmClassifier.kt` — the complete
   on-device inference engine (131 lines, no dependencies).
 - `case1-toxicity/compliance/` — the three-layer zero-persistence proof.
-- `docs/A–F` — full result tables.
+- `docs/A–G` — full result tables (G: post-hoc uncertainty quantification).
 
 ## Reproducing the client-side pipeline
 
@@ -53,11 +53,24 @@ each other by these folder names — keep them):
 6. `exp-0011-svm-deployment/code/` — `export_svm.py` (writes the ZBSV
    artifact), `reference_svm.py` + `equivalence_svm.py` (stage-1 equivalence),
    `calibrate_threshold.py` (the table in `docs/B-calibration.md`).
+7. `exp-0012-uncertainty-quantification/code/` — post-hoc uncertainty for the
+   headline comparisons: `runs_svm.py` (deterministic side + reproduction
+   gate), `runs_fasttext.py` (71 pre-registered retrains, one process per
+   run), `analyze.py` (bootstrap CIs and verdicts; `docs/G-uncertainty.md`).
+8. `exp-0013-teacher-server-variance/code/` — `teacher_seeds.py` (teacher
+   retrained from seeds 42/43/44, full cascade to both students; GPU),
+   `analyze_b.py`. The server-side seed sweep runs from `case2-anomaly`:
+   `ZENBYTE_EXP0013_OUT=$PWD/seed_sweep.csv go test -run TestExp0013 -v`,
+   then `analyze_c.py`.
 
 Determinism notes: scikit-learn results are deterministic given the seed;
 fastText does not expose a seed, so fastText numbers are reported as the mean
 of 3 runs (the recorded operating point happens to converge deterministically,
-std 0.000). The sealed test split is opened once per experiment, at its
+std 0.000). exp-0012 later established why: with one training per process,
+fastText is fully deterministic in this environment — the recorded
+nondeterminism traces to in-process repeated training (persistent NaN
+divergence) and its learning-rate-halving retry. The retraining scripts
+therefore isolate every run in a fresh process. The sealed test split is opened once per experiment, at its
 recorded operating point — preserving that discipline is part of reproducing
 the result.
 
