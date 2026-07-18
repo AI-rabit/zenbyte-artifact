@@ -207,10 +207,11 @@ func TestSelectedConfig(t *testing.T) {
 		t.Errorf("ramp 탐지 지연 %ds (기대: ≤30초)", ramp)
 	}
 
-	// low-and-slow는 구조적 미탐이 예상된다 — 이것이 바뀌면(탐지되면) 오히려 알림을 남긴다.
+	// low-and-slow는 구조적 미탐이 문서화된 한계다 — 탐지되면 그 문서가 낡은 것이므로
+	// 테스트를 실패시켜 갱신을 강제한다 (부정 주장도 테스트로 고정).
 	lowSlow := simulateAttack(d, ra, base, "low-and-slow")
 	if lowSlow >= 0 {
-		t.Logf("참고: low-and-slow가 %ds에 탐지됨 (기존 기록은 미탐 — 재확인 필요)", lowSlow)
+		t.Errorf("low-and-slow가 %ds에 탐지됨 — '구조적 미탐'이라는 문서화된 한계가 더 이상 참이 아니다", lowSlow)
 	}
 
 	t.Logf("채택 파라미터 %+v", cfg)
