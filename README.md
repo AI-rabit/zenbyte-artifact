@@ -37,7 +37,7 @@ REPRODUCE.md               environment, data acquisition, execution order
 | Attribution: gain comes from teacher labels, not more text (§5.4, T2) | `pipeline/exp-0009-distillation/` + `docs/F-attribution.md` |
 | Label-definition transfer asymmetry (§5.3) | `pipeline/exp-0008-dataset-survey/` + `docs/A-transfer-matrix.md` |
 | Kotlin ≡ scikit-learn, max Δp < 1e-4, 0 decision flips (§5.6) | `case1-toxicity/equivalence/` + `inference-kotlin/` + `docs/E-equivalence.md` |
-| Zero-persistence proven at 3 layers: static / network / disk (§5.6) | `case1-toxicity/compliance/` |
+| Zero-persistence proven at 3 layers: static / network / disk (§5.6) | `case1-toxicity/compliance/` — `bash zero_persistence_audit.sh` runs the static layer |
 | Warning-rate calibration at the deployed threshold (§5.6) | `docs/B-calibration.md` + `pipeline/exp-0011-svm-deployment/code/calibrate_threshold.py` |
 | Memory ceiling: 100k keys → tracked state flat at 10k, heap +2.1 MB (§6.2, F3) | `case2-anomaly/` — `go test -run TestMemoryBoundUnderKeyFlood -v` |
 | Baseline freeze under alarm (poisoning defense) (§6.2) | `case2-anomaly/` — `go test -run TestBaselinePoisoning -v` |

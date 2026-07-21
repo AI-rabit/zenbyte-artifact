@@ -9,14 +9,25 @@ by review. The three layers, all included here verbatim:
 | **Network** | `ChatViewModelToxicityTest.kt` | Nothing is transmitted before the user confirms the warning; after confirming, only the original message bytes leave — the wire format has no field where a verdict or score could ride. |
 | **Disk** | `DefaultToxicityRepositoryTest.kt` | The app's entire data directories are byte-compared before and after repeated inference: zero files added, removed, or changed. |
 
-`audited-sources/` contains the exact files the static audit targets:
-`TfidfSvmClassifier.kt` (inference), `DefaultToxicityRepository.kt`
-(lazy asset load, fail-open), `ToxicityRepository.kt` (domain interface).
+`audited-sources/` contains the exact files the static audit targets, copied
+verbatim from the app: `TfidfSvmClassifier.kt` (inference),
+`DefaultToxicityRepository.kt` (lazy asset load, fail-open),
+`ToxicityRepository.kt` (domain interface), and `ChatViewModel.kt` (the
+warning-state lifetime checked in the second half of the script — included
+whole rather than excerpted, so the audit cannot be accused of grepping a
+favourable extract).
 
 ## Running
 
-The script and tests execute inside the app's Gradle project (the messenger is
-in closed beta and its full source is not published); they are included here
-so that reviewers can inspect exactly what is asserted. The script's checks
-are plain `grep -E` patterns over the audited sources — auditable by eye — and
-can be pointed at `audited-sources/` by editing its `FILES` array.
+```
+bash zero_persistence_audit.sh     # from any working directory; exit 0 = pass
+```
+
+The script resolves its targets relative to its own location, so it needs no
+Gradle project and no network. Its checks are plain `grep -E` patterns over
+`audited-sources/` — auditable by eye.
+
+The two JUnit tests are the runtime half of the proof and execute inside the
+app's Gradle project (the messenger is in closed beta and its full source is
+not published); they are included here so that reviewers can read exactly what
+is asserted.

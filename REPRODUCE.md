@@ -12,6 +12,12 @@ Go ≥ 1.24, standard library only. This reproduces the executable content of
 paper §6 (Table 4, Figure 3's underlying measurement, the poisoning defense,
 restart recovery, and the pinned low-and-slow non-detection).
 
+```
+bash case1-toxicity/compliance/zero_persistence_audit.sh
+```
+
+Bash only. This is the static layer of the §5.6 zero-persistence proof.
+
 ## What can be inspected without running anything
 
 - `case1-toxicity/model/toxicity_model.zbsv` — the deployed artifact
@@ -19,7 +25,8 @@ restart recovery, and the pinned low-and-slow non-detection).
 - `case1-toxicity/equivalence/` — test vectors + reference probabilities.
 - `case1-toxicity/inference-kotlin/TfidfSvmClassifier.kt` — the complete
   on-device inference engine (131 lines, no dependencies).
-- `case1-toxicity/compliance/` — the three-layer zero-persistence proof.
+- `case1-toxicity/compliance/` — the three-layer zero-persistence proof
+  (its static layer also runs, see above).
 - `docs/A–G` — full result tables (G: post-hoc uncertainty quantification).
 
 ## Reproducing the client-side pipeline
@@ -76,9 +83,17 @@ the result.
 
 ## Reproducing the compliance proof
 
-The static audit and the two JUnit tests run inside the app's Gradle project,
-which is not published while the product is in closed beta; the audit script,
-the audited sources it checks, and both test files are included verbatim under
-`case1-toxicity/compliance/` for inspection (see its README for what each
-layer asserts and how the script fails loudly when an audit target is
-missing).
+The static layer runs here, with no setup:
+
+```
+bash case1-toxicity/compliance/zero_persistence_audit.sh    # exit 0 = pass
+```
+
+It checks the audited sources bundled under `compliance/audited-sources/`
+(copied verbatim from the app) and exits non-zero if any target file is
+missing, so the audit cannot pass vacuously.
+
+The two JUnit tests are the runtime layer and need the app's Gradle project,
+which is not published while the product is in closed beta; both test files
+are included verbatim under `case1-toxicity/compliance/` so that reviewers can
+read exactly what is asserted (see its README for what each layer covers).
