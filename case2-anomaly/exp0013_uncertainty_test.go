@@ -7,19 +7,23 @@ import (
 	"testing"
 )
 
-// exp-0013 Phase C: 시뮬레이션 seed 분산 측정 (doc/research/exp-0013-teacher-server-variance/).
+// exp-0013 Phase C: simulation seed variance
+// (see case1-toxicity/pipeline/exp-0013-teacher-server-variance/).
 //
-// exp-0005의 채택 파라미터 수치(오탐 0.2%, burst 즉시, ramp 20초, low-and-slow 미탐)는
-// 고정 seed(정상 42, 공격 7) 단일 실행이었다. 본 하니스는 동일 프로토콜(TestSelectedConfig:
-// 정상 500키 × 3600틱 × base 2.0/s, 공격 warmup 120틱 + 300틱)을 seed 30쌍
-// (정상 1000+i, 공격 2000+i)으로 반복해 분포를 산출한다.
+// The figures reported for the parameters adopted in exp-0005 (0.2% false
+// positives, burst detected immediately, ramp in 20s, low-and-slow missed) came
+// from a single run on fixed seeds (normal 42, attack 7). This harness repeats
+// the identical protocol (TestSelectedConfig: 500 normal keys × 3600 ticks at
+// base 2.0/s; attack warm-up 120 ticks + 300 ticks) over 30 seed pairs
+// (normal 1000+i, attack 2000+i) to obtain a distribution.
 //
-// 평상시 `go test ./...`에서는 skip된다 — ZENBYTE_EXP0013_OUT에 CSV 출력 경로를
-// 지정했을 때만 실행 (기존 테스트 시간·CI 불변). 테스트 파일이므로 배포 바이너리와 무관.
+// It is skipped in an ordinary `go test ./...` run — it executes only when
+// ZENBYTE_EXP0013_OUT names a CSV output path, so existing test time and CI
+// remain unchanged. Being a test file, it has no bearing on the shipped binary.
 func TestExp0013SeedSweep(t *testing.T) {
 	out := os.Getenv("ZENBYTE_EXP0013_OUT")
 	if out == "" {
-		t.Skip("exp-0013 하니스: ZENBYTE_EXP0013_OUT 미설정 — skip")
+		t.Skip("exp-0013 harness: ZENBYTE_EXP0013_OUT not set — skipping")
 	}
 
 	const (
@@ -31,7 +35,7 @@ func TestExp0013SeedSweep(t *testing.T) {
 
 	f, err := os.Create(out)
 	if err != nil {
-		t.Fatalf("출력 파일 생성 실패: %v", err)
+		t.Fatalf("could not create output file: %v", err)
 	}
 	defer f.Close()
 	fmt.Fprintln(f, "i,normal_seed,attack_seed,fp_rate,burst_delay,ramp_delay,lowslow_delay")
@@ -59,5 +63,5 @@ func TestExp0013SeedSweep(t *testing.T) {
 		fmt.Fprintf(f, "%d,%d,%d,%.6f,%d,%d,%d\n", i, normalSeed, attackSeed, fp, burst, ramp, lowSlow)
 		t.Logf("seed %2d: FP %.2f%% burst %ds ramp %ds low&slow %d", i, fp*100, burst, ramp, lowSlow)
 	}
-	t.Logf("→ %s 저장 (판정은 exp-0013 analyze_c.py — 사전 등록 기준)", out)
+	t.Logf("→ written to %s (the verdict is decided by exp-0013 analyze_c.py against its pre-registered criteria)", out)
 }

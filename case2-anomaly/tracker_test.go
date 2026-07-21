@@ -8,11 +8,13 @@ import (
 	"time"
 )
 
-// TestMemoryBoundUnderKeyFlood는 exp-0006의 핵심 증명이다.
+// TestMemoryBoundUnderKeyFlood is the central proof of exp-0006.
 //
-// 10만 개의 상이한 키를 주입해도 추적 상태가 LRU 상한에서 고정되며,
-// 힙 사용량이 상한 × 엔트리크기 규모를 넘지 않음을 시계열로 보인다.
-// (이 테스트가 실패하면 "DB는 없지만 메모리가 무한히 쌓이는" 새로운 영속화가 발생한 것이다.)
+// It injects 100,000 distinct keys and shows, as a time series, that tracked
+// state stays pinned at the LRU cap and that heap usage never exceeds the scale
+// of cap × entry size.
+// (If this test fails, a new form of persistence has appeared — no database,
+// but memory growing without bound.)
 func TestMemoryBoundUnderKeyFlood(t *testing.T) {
 	cfg := DefaultTrackerConfig()
 	cfg.MaxKeys = 10_000
@@ -26,8 +28,8 @@ func TestMemoryBoundUnderKeyFlood(t *testing.T) {
 	runtime.ReadMemStats(&m)
 	heapBefore := m.HeapAlloc
 
-	t.Log("=== 키 홍수 부하: 10만 개 상이한 키 주입 (LRU 상한 1만) ===")
-	t.Log("주입키수 | 추적키수 | 축출누적 | 힙(MB)")
+	t.Log("=== key flood: injecting 100k distinct keys (LRU cap 10k) ===")
+	t.Log("injected | tracked | evicted | heap(MB)")
 
 	for i := 0; i < totalKeys; i++ {
 		key := fmt.Sprintf("key-%d", i)
@@ -40,7 +42,7 @@ func TestMemoryBoundUnderKeyFlood(t *testing.T) {
 				i+1, s.TrackedKeys, s.TotalEvicted, float64(m.HeapAlloc)/1024/1024)
 
 			if s.TrackedKeys > cfg.MaxKeys {
-				t.Fatalf("추적 키 수 %d > 상한 %d — 메모리 상한 붕괴", s.TrackedKeys, cfg.MaxKeys)
+				t.Fatalf("tracked keys %d > cap %d — the memory bound has collapsed", s.TrackedKeys, cfg.MaxKeys)
 			}
 		}
 	}
@@ -51,23 +53,24 @@ func TestMemoryBoundUnderKeyFlood(t *testing.T) {
 	growth := int64(heapAfter) - int64(heapBefore)
 
 	final := tr.Stats(now)
-	t.Logf("최종: 추적 %d키 (상한 %d), 축출 %d회, 힙 증가 %.1fMB",
+	t.Logf("final: %d keys tracked (cap %d), %d evictions, heap growth %.1fMB",
 		final.TrackedKeys, final.MaxKeys, final.TotalEvicted, float64(growth)/1024/1024)
 
-	// 상한 검증: 이론 상한(1만 × 200B ≈ 2MB)의 여유 배수 안에 들어와야 한다.
-	// (Go 런타임 오버헤드·GC 타이밍을 감안해 10MB를 실패선으로 둔다 —
-	//  무한 성장이면 10만 키 × 200B = 20MB+ 로 이 선을 넘는다.)
+	// Bound check: growth must stay within a slack multiple of the theoretical
+	// bound (10k × 200B ≈ 2MB). The failure line is set at 10MB to allow for Go
+	// runtime overhead and GC timing — unbounded growth would put 100k keys ×
+	// 200B = 20MB+ well past it.
 	const failLimit = 10 << 20
 	if growth > failLimit {
-		t.Errorf("힙 증가 %.1fMB > %dMB — 상태가 상한을 넘어 성장함",
+		t.Errorf("heap growth %.1fMB > %dMB — state grew past its bound",
 			float64(growth)/1024/1024, failLimit>>20)
 	}
 	if final.TrackedKeys != cfg.MaxKeys {
-		t.Errorf("추적 키 수 %d ≠ 상한 %d", final.TrackedKeys, cfg.MaxKeys)
+		t.Errorf("tracked keys %d ≠ cap %d", final.TrackedKeys, cfg.MaxKeys)
 	}
 }
 
-// TestTTLEviction은 비활동 키의 상태가 자동 소멸함을 확인한다.
+// TestTTLEviction confirms that state for idle keys expires on its own.
 func TestTTLEviction(t *testing.T) {
 	cfg := DefaultTrackerConfig()
 	cfg.IdleTTL = time.Hour
@@ -78,24 +81,25 @@ func TestTTLEviction(t *testing.T) {
 		tr.Observe(fmt.Sprintf("old-%d", i), 1, now)
 	}
 	if got := tr.Stats(now).TrackedKeys; got != 100 {
-		t.Fatalf("추적 키 %d ≠ 100", got)
+		t.Fatalf("tracked keys %d ≠ 100", got)
 	}
 
-	// 2시간 후 청소
+	// Sweep two hours later
 	later := now.Add(2 * time.Hour)
 	tr.Sweep(later)
 
 	s := tr.Stats(later)
 	if s.TrackedKeys != 0 {
-		t.Errorf("TTL 경과 후에도 %d키 잔존 — 상태가 영속화됨", s.TrackedKeys)
+		t.Errorf("%d keys survived past the TTL — state persisted", s.TrackedKeys)
 	}
 	if s.TotalExpired != 100 {
-		t.Errorf("만료 카운트 %d ≠ 100", s.TotalExpired)
+		t.Errorf("expiry count %d ≠ 100", s.TotalExpired)
 	}
-	t.Logf("비활동 100키가 TTL(1h) 경과 후 전부 소멸 (만료 %d)", s.TotalExpired)
+	t.Logf("all 100 idle keys vanished after the TTL (1h) elapsed (%d expired)", s.TotalExpired)
 }
 
-// TestRateLimitAndAutoRelease는 경보 키 차단과 TTL 기반 자동 해제를 확인한다.
+// TestRateLimitAndAutoRelease confirms that an alarming key is blocked and then
+// released automatically once its deadline passes.
 func TestRateLimitAndAutoRelease(t *testing.T) {
 	cfg := DefaultTrackerConfig()
 	cfg.LimitDuration = time.Minute
@@ -105,14 +109,14 @@ func TestRateLimitAndAutoRelease(t *testing.T) {
 	now := time.Now()
 	key := "attacker"
 
-	// 워밍업: 정상 트래픽
+	// Warm-up: normal traffic
 	for i := 0; i < 30; i++ {
 		if tr.Observe(key, poisson(r, 2.0), now.Add(time.Duration(i)*time.Second)) {
-			t.Fatalf("정상 트래픽이 %d초에 차단됨", i)
+			t.Fatalf("normal traffic blocked at %ds", i)
 		}
 	}
 
-	// 공격: burst
+	// Attack: burst
 	blockedAt := -1
 	for i := 30; i < 40; i++ {
 		if tr.Observe(key, poisson(r, 40.0), now.Add(time.Duration(i)*time.Second)) {
@@ -121,41 +125,44 @@ func TestRateLimitAndAutoRelease(t *testing.T) {
 		}
 	}
 	if blockedAt < 0 {
-		t.Fatal("burst 공격이 차단되지 않음")
+		t.Fatal("the burst attack was not blocked")
 	}
 
-	// 차단 유지 확인
+	// The block must hold
 	during := now.Add(time.Duration(blockedAt+10) * time.Second)
 	if !tr.IsBlocked(key, during) {
-		t.Error("차단 기간 중인데 IsBlocked=false")
+		t.Error("IsBlocked=false while still inside the block window")
 	}
 
-	// TTL(1분) 경과 후 자동 해제
+	// Automatic release once the limit (1 minute) has passed
 	after := now.Add(time.Duration(blockedAt)*time.Second + 2*time.Minute)
 	if tr.IsBlocked(key, after) {
-		t.Error("차단 시간 경과 후에도 해제되지 않음")
+		t.Error("still blocked after the block window elapsed")
 	}
 	if tr.Observe(key, 2, after) {
-		t.Error("해제 후 정상 트래픽이 다시 차단됨 (CUSUM 리셋 실패)")
+		t.Error("normal traffic blocked again after release (CUSUM reset failed)")
 	}
-	t.Logf("burst를 %d초에 차단, 1분 후 자동 해제 확인", blockedAt-30)
+	t.Logf("burst blocked at %ds, automatic release after 1 minute confirmed", blockedAt-30)
 }
 
-// TestAbsoluteCeilingBackstop은 절대 상한이 적응형 탐지의 백스톱으로 동작함을 확인한다.
+// TestAbsoluteCeilingBackstop confirms that the absolute ceiling acts as a
+// backstop to the adaptive detector.
 func TestAbsoluteCeilingBackstop(t *testing.T) {
 	cfg := DefaultTrackerConfig()
 	cfg.Ceiling = 50
 	tr := NewTracker(cfg)
 	now := time.Now()
 
-	// 워밍업 없이 곧바로 상한 초과 → 워밍업 중이라 CUSUM은 침묵하지만 절대 상한이 잡는다
+	// Exceed the ceiling immediately, with no warm-up → CUSUM stays silent
+	// because it is still warming up, but the absolute ceiling catches it.
 	if !tr.Observe("flooder", 100, now) {
-		t.Error("절대 상한(50)을 넘는 첫 관측이 차단되지 않음 (워밍업 사각지대)")
+		t.Error("the first observation above the absolute ceiling (50) was not blocked (warm-up blind spot)")
 	}
-	t.Log("워밍업 중에도 절대 상한이 즉시 차단 — CUSUM 워밍업 사각지대를 보완")
+	t.Log("the absolute ceiling blocks immediately even during warm-up — covering the CUSUM warm-up blind spot")
 }
 
-// BenchmarkObserve는 hot path 비용을 측정한다 (릴레이 처리에 얹을 수 있는가).
+// BenchmarkObserve measures the hot-path cost (can this ride along with relay
+// processing?).
 func BenchmarkObserve(b *testing.B) {
 	tr := NewTracker(DefaultTrackerConfig())
 	now := time.Now()
@@ -169,23 +176,25 @@ func BenchmarkObserve(b *testing.B) {
 	}
 }
 
-// TestTrackerRestartRecovery는 상태 전소(서버 재시작) 후 재수렴을 확인한다.
-// 무기록 서버는 상태를 백업할 수 없으므로, 빈 상태에서 빠르게 복귀해야 한다.
+// TestTrackerRestartRecovery confirms reconvergence after total state loss (a
+// server restart). A no-log server cannot back its state up, so it has to
+// recover quickly from empty.
 func TestTrackerRestartRecovery(t *testing.T) {
-	tr := NewTracker(DefaultTrackerConfig()) // 재시작 = 빈 Tracker
+	tr := NewTracker(DefaultTrackerConfig()) // restart = an empty Tracker
 	r := rand.New(rand.NewSource(9))
 	now := time.Now()
 
-	// 재시작 직후 정상 트래픽 10초 — 오차단이 없어야 한다
+	// 10s of normal traffic right after the restart — nothing may be blocked
 	for i := 0; i < 10; i++ {
 		if tr.Observe("user", poisson(r, 2.0), now.Add(time.Duration(i)*time.Second)) {
-			t.Fatalf("재시작 %d초 후 정상 트래픽이 차단됨 (워밍업 실패)", i)
+			t.Fatalf("normal traffic blocked %ds after restart (warm-up failed)", i)
 		}
 	}
 
-	// 10초 시점에 공격 → 즉시 탐지되어야 한다 (성공 기준: 10초 내 기능 복귀)
+	// Attack at the 10s mark → must be detected at once (success criterion:
+	// functional recovery within 10 seconds)
 	if !tr.Observe("user", 60, now.Add(10*time.Second)) {
-		t.Error("재시작 10초 후 공격을 탐지하지 못함")
+		t.Error("failed to detect the attack 10s after restart")
 	}
-	t.Log("재시작 후 10초 내 탐지 기능 복귀 확인 (오차단 0)")
+	t.Log("detection recovered within 10s of restart, with zero false blocks")
 }

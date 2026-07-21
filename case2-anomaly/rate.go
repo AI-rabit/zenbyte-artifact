@@ -5,21 +5,23 @@ import (
 	"time"
 )
 
-// RateTracker는 "이벤트 발생" 단위의 호출을 초당 관측치로 변환해 Tracker에 넘긴다.
+// RateTracker converts per-event calls into per-second observations and hands
+// those to the Tracker.
 //
-// 사용법 (릴레이 hot path):
+// Usage (relay hot path):
 //
-//	if rt.IsBlocked(key) { drop }   // O(1), 잠금 최소
-//	rt.Record(key)                  // 카운터 증가만
+//	if rt.IsBlocked(key) { drop }   // O(1), minimal locking
+//	rt.Record(key)                  // counter increment only
 //
-// 그리고 1초마다 rt.Tick(now)가 카운터를 관측치로 flush한다.
-// 카운터는 flush 즉시 비워지므로 과거 트래픽이 축적되지 않는다 (Zero-Persistence).
+// Then once a second rt.Tick(now) flushes the counters as observations.
+// The counters are cleared as they are flushed, so past traffic never
+// accumulates (zero-persistence).
 type RateTracker struct {
 	tracker *Tracker
 
 	mu      sync.Mutex
-	counts  map[string]float64 // 현재 틱의 키별 이벤트 수 (flush 시 비워짐)
-	ceiling float64            // 틱 내 즉시 차단 상한 (0 = 비활성)
+	counts  map[string]float64 // per-key event count for the current tick (cleared on flush)
+	ceiling float64            // in-tick immediate block ceiling (0 = disabled)
 }
 
 func NewRateTracker(cfg TrackerConfig) *RateTracker {
@@ -30,8 +32,9 @@ func NewRateTracker(cfg TrackerConfig) *RateTracker {
 	}
 }
 
-// Record는 키의 이벤트 1건을 현재 틱에 기록한다. 절대 상한을 즉시 넘으면 true(차단)를 반환한다.
-// 틱 경계를 기다리지 않고 폭주를 끊기 위한 인라인 백스톱이다.
+// Record logs one event for a key in the current tick. It returns true (block)
+// as soon as the absolute ceiling is crossed — an inline backstop that cuts off
+// a flood without waiting for the tick boundary.
 func (rt *RateTracker) Record(key string) (overCeiling bool) {
 	rt.mu.Lock()
 	rt.counts[key]++
@@ -40,13 +43,14 @@ func (rt *RateTracker) Record(key string) (overCeiling bool) {
 	return rt.ceiling > 0 && c > rt.ceiling
 }
 
-// IsBlocked는 이전 틱들의 판정으로 현재 차단 중인지 확인한다 (상태 갱신 없음).
+// IsBlocked reports whether a key is currently blocked by earlier ticks'
+// verdicts, without updating any state.
 func (rt *RateTracker) IsBlocked(key string, now time.Time) bool {
 	return rt.tracker.IsBlocked(key, now)
 }
 
-// Tick은 현재 틱의 카운터를 탐지기로 흘려보내고 카운터를 비운다. 1초마다 호출한다.
-// 반환값: 이번 틱에 새로 차단된 키 수.
+// Tick feeds the current tick's counters into the detector and clears them.
+// Call it once a second. It returns the number of keys newly blocked this tick.
 func (rt *RateTracker) Tick(now time.Time) int {
 	rt.mu.Lock()
 	counts := rt.counts
@@ -59,7 +63,7 @@ func (rt *RateTracker) Tick(now time.Time) int {
 			newlyBlocked++
 		}
 	}
-	// 트래픽이 끊긴 키의 상태도 TTL로 소멸시킨다
+	// Let the TTL expire state for keys whose traffic has stopped as well.
 	rt.tracker.Sweep(now)
 	return newlyBlocked
 }

@@ -8,23 +8,25 @@ import (
 	"unsafe"
 )
 
-// exp-0005 오프라인 시뮬레이션.
+// exp-0005 offline simulation.
 //
-// 합성 트래픽으로 (Alpha, K, H)를 튜닝하고 탐지 성능·오탐율을 측정한다.
-// 모든 시뮬레이션은 고정 시드로 재현 가능하다.
+// Tunes (Alpha, K, H) on synthetic traffic and measures detection performance
+// and the false positive rate. Every simulation is reproducible from a fixed
+// seed.
 //
-// 트래픽 모델: 1초 = 1틱. 각 틱마다 키별 이벤트 수를 관측한다.
-//   - 정상: 일주기(낮/밤) 기저율 위의 포아송 잡음
-//   - burst: 특정 시점부터 기저율의 20배로 급증
-//   - ramp: 60초에 걸쳐 서서히 10배까지 증가
-//   - low-and-slow: 기저율의 2배로 지속 (탐지 난이도 최상)
+// Traffic model: 1 second = 1 tick. Each tick observes a per-key event count.
+//   - normal:       Poisson noise on top of a diurnal (day/night) base rate
+//   - burst:        a jump to 20× the base rate from a given instant
+//   - ramp:         a gradual rise to 10× over 60 seconds
+//   - low-and-slow: sustained at 2× the base rate (the hardest case)
 
 const tickSec = 1
 
-// diurnalRate는 하루 주기의 기저 트래픽 수준을 반환한다 (낮 피크, 새벽 저점).
+// diurnalRate returns the base traffic level over a daily cycle (peak in the
+// afternoon, trough before dawn).
 func diurnalRate(tick int, base float64) float64 {
 	hour := float64(tick%86400) / 3600.0
-	// 0.4 ~ 1.6배로 완만히 변동 (새벽 4시 최저, 오후 4시 최고)
+	// Varies gently between 0.4× and 1.6× (lowest at 4am, highest at 4pm)
 	factor := 1.0 + 0.6*math.Sin(2*math.Pi*(hour-10)/24)
 	return base * factor
 }
@@ -48,7 +50,7 @@ func poisson(r *rand.Rand, lambda float64) float64 {
 	}
 }
 
-// simulateNormal은 정상 키 하나를 duration 틱 동안 관측하고 경보 횟수를 센다.
+// simulateNormal observes one normal key for duration ticks and counts alarms.
 func simulateNormal(d *Detector, r *rand.Rand, base float64, duration int) (alarms int) {
 	s := &KeyState{}
 	t0 := time.Now()
@@ -61,12 +63,12 @@ func simulateNormal(d *Detector, r *rand.Rand, base float64, duration int) (alar
 	return
 }
 
-// simulateAttack은 워밍업 후 공격을 주입하고, 주입 시점부터 첫 경보까지의 지연(초)을 반환한다.
-// 미탐이면 -1.
+// simulateAttack injects an attack after a warm-up and returns the delay in
+// seconds from injection to the first alarm, or -1 if it is missed.
 func simulateAttack(d *Detector, r *rand.Rand, base float64, attack string) int {
 	s := &KeyState{}
 	t0 := time.Now()
-	const warmup = 120 // 2분간 정상 트래픽으로 기준선 형성
+	const warmup = 120 // 2 minutes of normal traffic to establish a baseline
 	const attackDur = 300
 
 	for tick := 0; tick < warmup; tick++ {
@@ -91,7 +93,7 @@ func simulateAttack(d *Detector, r *rand.Rand, base float64, attack string) int 
 	return -1
 }
 
-// 베이스라인: 고정 임계 rate-limit (기저율의 3배 초과 시 경보)
+// Baseline: a fixed-threshold rate limit (alarms above 3× the base rate)
 func simulateFixedThreshold(r *rand.Rand, base float64, multiplier float64, duration int) (alarms int) {
 	threshold := base * multiplier
 	for tick := 0; tick < duration; tick++ {
@@ -102,12 +104,13 @@ func simulateFixedThreshold(r *rand.Rand, base float64, multiplier float64, dura
 	return
 }
 
-// TestParameterSweep은 (Alpha, K, H) 격자에서 오탐율과 burst 탐지 지연을 측정한다.
+// TestParameterSweep measures the false positive rate and burst detection delay
+// over an (Alpha, K, H) grid.
 func TestParameterSweep(t *testing.T) {
 	const (
-		normalKeys = 200  // 정상 키 수 (오탐율 모수)
-		duration   = 3600 // 1시간 관측
-		base       = 2.0  // 초당 평균 2 이벤트
+		normalKeys = 200  // number of normal keys (the false-positive denominator)
+		duration   = 3600 // one hour of observation
+		base       = 2.0  // 2 events per second on average
 	)
 	type row struct {
 		cfg           Config
@@ -124,7 +127,7 @@ func TestParameterSweep(t *testing.T) {
 				cfg := Config{Alpha: alpha, K: k, H: h, MinSigma: 1.0, WarmupMin: 5}
 				d := New(cfg)
 
-				// 오탐: 정상 키 중 1회 이상 경보한 키의 비율
+				// False positives: the fraction of normal keys that alarmed at least once
 				r := rand.New(rand.NewSource(42))
 				keysWithAlarm := 0
 				for i := 0; i < normalKeys; i++ {
@@ -146,16 +149,16 @@ func TestParameterSweep(t *testing.T) {
 		}
 	}
 
-	t.Log("=== exp-0005 파라미터 스윕 (정상 200키 × 1h, base=2/s) ===")
-	t.Log("alpha    K    H | 오탐율 | burst | ramp | low&slow  (지연 초, -1=미탐)")
+	t.Log("=== exp-0005 parameter sweep (200 normal keys × 1h, base=2/s) ===")
+	t.Log("alpha    K    H |    FP | burst | ramp | low&slow  (delay in seconds, -1 = missed)")
 	for _, r := range rows {
 		t.Logf("%5.1f %4.1f %4.1f | %5.1f%% | %5d | %4d | %8d",
 			r.cfg.Alpha, r.cfg.K, r.cfg.H, r.falsePositive*100,
 			r.burstDelay, r.rampDelay, r.lowSlowDelay)
 	}
 
-	// 베이스라인 비교 (고정 임계)
-	t.Log("--- 베이스라인: 고정 임계 rate-limit ---")
+	// Baseline comparison (fixed threshold)
+	t.Log("--- baseline: fixed-threshold rate limit ---")
 	for _, mult := range []float64{2.0, 3.0, 5.0} {
 		rb := rand.New(rand.NewSource(42))
 		keysWithAlarm := 0
@@ -165,16 +168,18 @@ func TestParameterSweep(t *testing.T) {
 			}
 		}
 		fp := float64(keysWithAlarm) / float64(normalKeys)
-		// 고정 임계의 탐지 지연: burst(20배)는 1틱, low-and-slow(2배)는 임계 미만이면 영구 미탐
-		lowSlowDetect := "미탐"
+		// Detection delay of a fixed threshold: burst (20×) takes one tick, while
+		// low-and-slow (2×) is missed forever whenever it stays below the threshold
+		lowSlowDetect := "missed"
 		if base*2 > base*mult {
-			lowSlowDetect = "즉시"
+			lowSlowDetect = "immediate"
 		}
-		t.Logf("임계=%.0f× base | 오탐율 %5.1f%% | burst 즉시 | low&slow %s", mult, fp*100, lowSlowDetect)
+		t.Logf("threshold=%.0f× base | FP %5.1f%% | burst immediate | low&slow %s", mult, fp*100, lowSlowDetect)
 	}
 }
 
-// TestSelectedConfig는 채택 파라미터가 성공 기준을 만족하는지 검증한다 (회귀 방지).
+// TestSelectedConfig verifies that the adopted parameters still meet the
+// success criteria (regression guard).
 func TestSelectedConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	d := New(cfg)
@@ -193,42 +198,45 @@ func TestSelectedConfig(t *testing.T) {
 	}
 	fp := float64(keysWithAlarm) / float64(normalKeys)
 	if fp > 0.05 {
-		t.Errorf("오탐율 %.1f%% > 5%% (성공 기준 위반)", fp*100)
+		t.Errorf("false positive rate %.1f%% > 5%% (success criterion violated)", fp*100)
 	}
 
 	ra := rand.New(rand.NewSource(7))
 	burst := simulateAttack(d, ra, base, "burst")
 	if burst < 0 || burst > 3 {
-		t.Errorf("burst 탐지 지연 %ds (기준: ≤3초)", burst)
+		t.Errorf("burst detection delay %ds (criterion: ≤3s)", burst)
 	}
 
 	ramp := simulateAttack(d, ra, base, "ramp")
 	if ramp < 0 || ramp > 30 {
-		t.Errorf("ramp 탐지 지연 %ds (기대: ≤30초)", ramp)
+		t.Errorf("ramp detection delay %ds (expected: ≤30s)", ramp)
 	}
 
-	// low-and-slow는 구조적 미탐이 문서화된 한계다 — 탐지되면 그 문서가 낡은 것이므로
-	// 테스트를 실패시켜 갱신을 강제한다 (부정 주장도 테스트로 고정).
+	// Missing low-and-slow is a documented, structural limitation — if it were
+	// ever detected, that documentation would be stale, so the test fails to
+	// force an update (pinning the negative claim as well).
 	lowSlow := simulateAttack(d, ra, base, "low-and-slow")
 	if lowSlow >= 0 {
-		t.Errorf("low-and-slow가 %ds에 탐지됨 — '구조적 미탐'이라는 문서화된 한계가 더 이상 참이 아니다", lowSlow)
+		t.Errorf("low-and-slow detected at %ds — the documented limitation of 'structurally undetectable' no longer holds", lowSlow)
 	}
 
-	t.Logf("채택 파라미터 %+v", cfg)
-	t.Logf("오탐율=%.1f%% burst=%ds ramp=%ds low&slow=%ds(-1=미탐, 알려진 한계)",
+	t.Logf("adopted parameters %+v", cfg)
+	t.Logf("FP=%.1f%% burst=%ds ramp=%ds low&slow=%ds (-1 = missed, a known limitation)",
 		fp*100, burst, ramp, lowSlow)
 }
 
-// TestAbsoluteCeiling은 low-and-slow의 구조적 미탐을 절대 상한이 보완함을 보인다.
-// EWMA/CUSUM은 "평소 대비 이상"을 보고, 절대 상한은 "어떤 경우에도 넘으면 안 되는 선"을 지킨다.
-// 두 장치는 상보적이며, exp-0006의 허브 통합에서 함께 적용한다.
+// TestAbsoluteCeiling shows how an absolute ceiling complements the structural
+// blindness to low-and-slow abuse. EWMA/CUSUM watches for "unusual relative to
+// this key's own normal"; the absolute ceiling holds a line that must not be
+// crossed under any circumstance. The two are complementary and are applied
+// together in the exp-0006 hub integration.
 func TestAbsoluteCeiling(t *testing.T) {
 	d := New(DefaultConfig())
-	const ceiling = 10.0 // 초당 10 이벤트: 정상 사용자가 결코 넘지 않는 선 (base=2)
+	const ceiling = 10.0 // 10 events/s: a line a normal user never crosses (base=2)
 	r := rand.New(rand.NewSource(11))
 	t0 := time.Now()
 
-	// 정상 트래픽은 절대 상한을 건드리지 않는다
+	// Normal traffic never touches the absolute ceiling
 	sNormal := &KeyState{}
 	normalCeilingHits := 0
 	for tick := 0; tick < 3600; tick++ {
@@ -239,12 +247,15 @@ func TestAbsoluteCeiling(t *testing.T) {
 		}
 	}
 	if normalCeilingHits > 0 {
-		t.Errorf("정상 트래픽이 절대 상한을 %d회 초과 (상한이 너무 낮음)", normalCeilingHits)
+		t.Errorf("normal traffic exceeded the absolute ceiling %d times (ceiling set too low)", normalCeilingHits)
 	}
 
-	// low-and-slow(2×)는 CUSUM이 놓치지만, 공격이 상한을 넘는 순간 절대 상한이 잡는다.
-	// 2× = 초당 4 이벤트는 상한(10) 아래이므로 여전히 통과한다 — 즉 절대 상한도 만능이 아니다.
-	// 이 실험이 증명하는 것: 두 장치의 사각지대가 서로 다르며, 겹치는 영역이 남는다는 사실 자체다.
+	// CUSUM misses low-and-slow (2×), but the absolute ceiling catches the attack
+	// the moment it crosses the line. At 2× = 4 events/s the attack stays under
+	// the ceiling (10) and still gets through — so the absolute ceiling is not a
+	// cure-all either. What this experiment establishes is precisely that: the
+	// two mechanisms have different blind spots, and an overlapping region
+	// remains.
 	sSlow := &KeyState{}
 	cusumCaught, ceilingCaught := false, false
 	for i := 0; i < 300; i++ {
@@ -256,12 +267,13 @@ func TestAbsoluteCeiling(t *testing.T) {
 			ceilingCaught = true
 		}
 	}
-	t.Logf("low-and-slow(2×): CUSUM 탐지=%v, 절대상한(%.0f/s) 탐지=%v", cusumCaught, ceiling, ceilingCaught)
-	t.Log("→ 결론: 2× 수준의 저속 남용은 두 장치 모두 통과한다. 이는 설계상 수용된 잔여 위험이며,")
-	t.Log("  무기록 서버에서는 과거 트래픽 이력을 보관할 수 없어 장기 프로파일링으로 잡을 수도 없다.")
+	t.Logf("low-and-slow (2×): caught by CUSUM=%v, caught by absolute ceiling (%.0f/s)=%v", cusumCaught, ceiling, ceilingCaught)
+	t.Log("→ conclusion: low-rate abuse around 2× passes both mechanisms. This is residual risk accepted by design,")
+	t.Log("  and a no-log server cannot retain traffic history, so long-horizon profiling cannot catch it either.")
 }
 
-// TestBaselinePoisoning은 지속 공격이 기준선을 끌어올려 탐지를 무력화하지 못함을 확인한다.
+// TestBaselinePoisoning confirms that a sustained attack cannot drag the
+// baseline up and neutralize detection.
 func TestBaselinePoisoning(t *testing.T) {
 	d := New(DefaultConfig())
 	s := &KeyState{}
@@ -273,7 +285,7 @@ func TestBaselinePoisoning(t *testing.T) {
 	}
 	baselineBefore := s.Mean
 
-	// 10분간 지속 공격 (20배)
+	// 10 minutes of sustained attack (20×)
 	alarmTicks := 0
 	for i := 0; i < 600; i++ {
 		if d.Observe(s, poisson(r, 40.0), t0.Add(time.Duration(120+i)*time.Second)) {
@@ -282,21 +294,22 @@ func TestBaselinePoisoning(t *testing.T) {
 	}
 
 	if alarmTicks < 500 {
-		t.Errorf("지속 공격 중 경보가 %d/600틱만 발생 — 기준선 오염 의심", alarmTicks)
+		t.Errorf("only %d/600 ticks alarmed during a sustained attack — baseline poisoning suspected", alarmTicks)
 	}
 	if s.Mean > baselineBefore*2 {
-		t.Errorf("기준선이 %.2f → %.2f로 오염됨 (공격 트래픽이 정상으로 학습됨)", baselineBefore, s.Mean)
+		t.Errorf("baseline poisoned from %.2f to %.2f (attack traffic learned as normal)", baselineBefore, s.Mean)
 	}
-	t.Logf("지속 공격 600틱 중 %d틱 경보, 기준선 %.2f → %.2f (오염 없음)", alarmTicks, baselineBefore, s.Mean)
+	t.Logf("%d of 600 attack ticks alarmed, baseline %.2f → %.2f (no poisoning)", alarmTicks, baselineBefore, s.Mean)
 }
 
-// TestRecoveryAfterRestart는 상태 전소(재시작) 후 재수렴 시간을 측정한다.
+// TestRecoveryAfterRestart measures the reconvergence time after total state
+// loss (a restart).
 func TestRecoveryAfterRestart(t *testing.T) {
 	d := New(DefaultConfig())
 	r := rand.New(rand.NewSource(3))
 	t0 := time.Now()
 
-	// 재시작 직후: 빈 상태에서 정상 트래픽 관측 시작
+	// Right after a restart: start observing normal traffic from empty state
 	s := &KeyState{}
 	falseAlarms := 0
 	for tick := 0; tick < 30; tick++ {
@@ -305,10 +318,10 @@ func TestRecoveryAfterRestart(t *testing.T) {
 		}
 	}
 	if falseAlarms > 0 {
-		t.Errorf("재시작 직후 오경보 %d회 (워밍업이 보호하지 못함)", falseAlarms)
+		t.Errorf("%d false alarms immediately after restart (warm-up failed to protect)", falseAlarms)
 	}
 
-	// 재수렴 확인: 30초 후 burst를 넣으면 즉시 잡히는가
+	// Reconvergence check: is a burst caught at once 30 seconds later?
 	detected := -1
 	for i := 0; i < 10; i++ {
 		if d.Observe(s, poisson(r, 40.0), t0.Add(time.Duration(30+i)*time.Second)) {
@@ -317,35 +330,37 @@ func TestRecoveryAfterRestart(t *testing.T) {
 		}
 	}
 	if detected < 0 || detected > 3 {
-		t.Errorf("재시작 30초 후 burst 탐지 실패/지연: %ds", detected)
+		t.Errorf("burst missed or detected late 30s after restart: %ds", detected)
 	}
-	t.Logf("재시작 후 30초 내 재수렴 완료 (오경보 0, burst 탐지 %ds)", detected)
+	t.Logf("reconverged within 30s of restart (0 false alarms, burst detected in %ds)", detected)
 }
 
-// TestStateSizeIsConstant는 키당 상태가 스칼라 상수 크기임을 문서화한다 (exp-0006 전제).
+// TestStateSizeIsConstant documents that per-key state is a constant-size set of
+// scalars (the premise of exp-0006).
 func TestStateSizeIsConstant(t *testing.T) {
 	var s KeyState
 	size := int(unsafeSizeof(s))
 	if size > 64 {
-		t.Errorf("KeyState가 %d바이트 — 스칼라 상태 설계 위반 의심", size)
+		t.Errorf("KeyState is %d bytes — the scalar-state design looks violated", size)
 	}
-	t.Logf("KeyState 크기: %d바이트 (키당 상수) — 메모리 상한 = 최대키수 × %d바이트", size, size)
+	t.Logf("KeyState size: %d bytes (constant per key) — memory bound = max keys × %d bytes", size, size)
 }
 
 func unsafeSizeof(s KeyState) uintptr {
 	return unsafe.Sizeof(s)
 }
 
-// TestRefinedSweep은 1차 스윕에서 드러난 경계(H≈8)를 정밀 탐색한다.
-// 목표: 오탐 ≤5%를 지키면서 ramp(완만한 상승)를 놓치지 않는 지점이 있는가?
+// TestRefinedSweep searches finely around the boundary the first sweep exposed
+// (H≈8). Question: is there a point that keeps false positives ≤5% while still
+// catching a ramp (a gradual rise)?
 func TestRefinedSweep(t *testing.T) {
 	const (
 		normalKeys = 200
 		duration   = 3600
 		base       = 2.0
 	)
-	t.Log("=== 2차 정밀 스윕 ===")
-	t.Log("alpha    K    H | 오탐율 | burst | ramp | low&slow")
+	t.Log("=== second, refined sweep ===")
+	t.Log("alpha    K    H |    FP | burst | ramp | low&slow")
 	for _, alpha := range []float64{0.05, 0.1, 0.15, 0.2} {
 		for _, k := range []float64{0.5, 0.75} {
 			for _, h := range []float64{8.0, 10.0, 12.0, 15.0} {
