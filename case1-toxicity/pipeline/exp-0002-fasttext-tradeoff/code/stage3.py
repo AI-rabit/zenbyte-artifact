@@ -1,7 +1,9 @@
-"""exp-0002 3단계: 재산정된 예산(≤15MB)의 6~15MB 대역 정밀 탐색.
+"""exp-0002 stage 3: a fine search of the 6–15MB band under the re-derived
+budget (≤15MB).
 
-1·2단계는 bucket ≤ 250k까지만 탐색 → 500k 등 대형 버킷은 미답.
-각 설정 3회 반복 평균 (fastText 확률성 대응), val + 임계값 튜닝.
+Stages 1 and 2 explored only up to bucket = 250k, leaving larger buckets such
+as 500k untried. Each configuration is averaged over 3 repeats (to cope with
+fastText's stochasticity), evaluated on val with threshold tuning.
 """
 import json
 import statistics
@@ -11,15 +13,15 @@ import numpy as np
 from common import ARTIFACTS, DATA, f1_binary, int8_serialized_bytes, load_split, train_with_retry
 from threshold import prob_positive
 
-# 6~15MB 대역 후보 (int8 예상 크기 주석)
+# candidates in the 6–15MB band (the comment on each line is its expected int8 size)
 CONFIGS = [
-    {"dim": 16, "bucket": 250_000, "minn": 2, "maxn": 4, "lr": 0.125},  # 6.0MB (기준점)
+    {"dim": 16, "bucket": 250_000, "minn": 2, "maxn": 4, "lr": 0.125},  # 6.0MB (reference point)
     {"dim": 16, "bucket": 350_000, "minn": 2, "maxn": 4, "lr": 0.125},  # ~8MB
     {"dim": 16, "bucket": 500_000, "minn": 2, "maxn": 4, "lr": 0.125},  # ~11.5MB
-    {"dim": 16, "bucket": 500_000, "minn": 2, "maxn": 5, "lr": 0.125},  # ~11.5MB (n-gram 폭 확대)
-    {"dim": 24, "bucket": 350_000, "minn": 2, "maxn": 4, "lr": 0.125},  # ~11.5MB (dim 확대)
-    {"dim": 32, "bucket": 250_000, "minn": 2, "maxn": 4, "lr": 0.125},  # 10.4MB (재검, 반복평균)
-    {"dim": 32, "bucket": 350_000, "minn": 2, "maxn": 4, "lr": 0.125},  # ~14.8MB (예산 상단)
+    {"dim": 16, "bucket": 500_000, "minn": 2, "maxn": 5, "lr": 0.125},  # ~11.5MB (wider n-gram range)
+    {"dim": 24, "bucket": 350_000, "minn": 2, "maxn": 4, "lr": 0.125},  # ~11.5MB (larger dim)
+    {"dim": 32, "bucket": 250_000, "minn": 2, "maxn": 4, "lr": 0.125},  # 10.4MB (re-checked, averaged over repeats)
+    {"dim": 32, "bucket": 350_000, "minn": 2, "maxn": 4, "lr": 0.125},  # ~14.8MB (top of the budget)
 ]
 REPEATS = 3
 
@@ -47,7 +49,7 @@ def main():
         results.append(row)
         print(json.dumps(row, ensure_ascii=False))
     best = max((r for r in results if r["int8_mb"] <= 15.0), key=lambda r: r["f1_mean"])
-    print(f"\n≤15MB 최고: {best}")
+    print(f"\nbest under 15MB: {best}")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
-"""exp-0002 정확도 상한선 측정: KcELECTRA fine-tune (GPU, 배포 후보 아님).
+"""exp-0002 accuracy ceiling: fine-tuning KcELECTRA (GPU; not a deployment
+candidate).
 
-목적: 동일 데이터·동일 val에서 트랜스포머의 F1을 측정해
-"0.80 목표가 데이터 한계인지 모델 한계인지" 판별하는 비교선을 얻는다.
-결과 모델은 앱에 반입하지 않는다 (exp-0001에서 배포 기각 확정).
+Purpose: measure a transformer's F1 on the same data and the same val split, to
+obtain a reference that settles whether the 0.80 target is limited by the data
+or by the model. The resulting model is never brought into the app — deployment
+of a transformer was already ruled out in exp-0001.
 """
 import json
 import sys

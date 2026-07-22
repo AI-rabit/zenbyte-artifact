@@ -1,8 +1,11 @@
-"""exp-0002 2단계 스윕: 1단계 최적 근방에서 epoch/loss/wordNgrams/오버샘플링 확장.
+"""exp-0002 stage-2 sweep: around the stage-1 optimum, extend along epoch,
+loss, wordNgrams and oversampling.
 
-autotune은 OOM(dim=719, bucket=5.1M 시도)으로 기각 → 메모리 상한을 우리가 통제하는
-수동 확장으로 대체. 기반 설정 2종(최고 F1 / ≤5MB 최고)에 한 번에 한 축씩 변형.
-평가: val + 임계값 튜닝 (test 봉인 유지).
+autotune was rejected after it ran out of memory (it attempted dim=719,
+bucket=5.1M), and is replaced here by a manual extension whose memory ceiling
+stays under our control. Two base configurations (best F1 / best under 5MB) are
+varied one axis at a time.
+Evaluation: val plus threshold tuning (test stays sealed).
 """
 import itertools
 import json
@@ -25,7 +28,7 @@ BASES = {
 
 
 def make_oversampled(factor: int) -> str:
-    """train의 양성만 factor배 복제한 입력 파일 생성."""
+    """Build an input file with the positives of train replicated `factor` times."""
     path = DATA / f"train.raw.os{factor}.txt"
     if not path.exists():
         df = load_split("train")
@@ -66,7 +69,7 @@ def run(base_name, base, *, epoch=25, loss="softmax", wordNgrams=2, oversample=1
 def main():
     rows = []
     for base_name, base in BASES.items():
-        rows.append(run(base_name, base))  # 기준점
+        rows.append(run(base_name, base))  # reference point
         for epoch in (50, 100):
             rows.append(run(base_name, base, epoch=epoch))
         for loss in ("hs", "ova"):
@@ -79,7 +82,7 @@ def main():
             print(json.dumps(r, ensure_ascii=False))
     df = pd.DataFrame(rows)
     df.to_csv(ARTIFACTS / "stage2_results.csv", index=False)
-    print("\n상위:")
+    print("\ntop results:")
     print(df.sort_values("f1", ascending=False).head(8).to_string())
 
 

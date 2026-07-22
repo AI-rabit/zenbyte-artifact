@@ -1,9 +1,13 @@
-"""exp-0002 최종 평가: 동작점 확정 후 봉인된 test set 개봉 (단 1회 절차).
+"""exp-0002 final evaluation: once the operating point is fixed, the sealed
+test set is opened — a one-time procedure.
 
-- 동작점: dim16 / bucket500k / minn2 / maxn5 / wordNgrams2 / epoch25 (stage3 val 최고, 10.79MB)
-- 임계값은 val에서 결정 → test에 그대로 적용 (선택 누수 방지)
-- 3회 반복: test F1 mean±std 보고
-- 비교선: 키워드 베이스라인 (test), 동작점 모델 저장 (exp-0003 반입용)
+- operating point: dim16 / bucket500k / minn2 / maxn5 / wordNgrams2 / epoch25
+  (best on val in stage 3, 10.79MB)
+- the threshold is chosen on val and applied unchanged to test, so the
+  selection cannot leak
+- 3 repeats: test F1 reported as mean±std
+- comparison: the keyword baseline (on test); the operating-point model is saved
+  for use in exp-0003
 """
 import json
 import statistics
@@ -22,7 +26,7 @@ def main():
     val, test = load_split("val"), load_split("test")
     yv, yt = val["label"].tolist(), test["label"].tolist()
 
-    # 키워드 베이스라인 (test)
+    # keyword baseline (test)
     kw = f1_binary(yt, [keyword_predict(t) for t in test["text"]])
     print(json.dumps({"model": "keyword", "split": "test",
                       **{k: round(v, 4) for k, v in kw.items()}}, ensure_ascii=False))
@@ -49,7 +53,7 @@ def main():
                       "int8_mb": round(int8_serialized_bytes(best_model) / 2**20, 2)},
                      ensure_ascii=False))
     best_model.save_model(str(ARTIFACTS / "operating_point.bin"))
-    print(f"동작점 모델 저장: artifacts/operating_point.bin")
+    print(f"operating-point model saved: artifacts/operating_point.bin")
 
 
 if __name__ == "__main__":

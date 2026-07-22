@@ -1,8 +1,10 @@
-"""exp-0002 임계값 튜닝: 스윕 상위 설정들을 재학습해 val에서 결정 임계값 최적화.
+"""exp-0002 threshold tuning: retrain the top sweep configurations and optimize
+the decision threshold on val.
 
-fastText 기본 판정은 argmax(=0.5)이나, 불균형 데이터(양성 17.6%)에서는
-P(1) 임계값을 val로 튜닝하는 것이 표준 관행이다. 임계값은 val에서만 고르고
-test에는 그대로 적용한다 (선택 누수 방지).
+fastText decides by argmax (i.e. 0.5) by default, but on imbalanced data
+(17.6% positive) tuning the P(1) threshold on val is standard practice. The
+threshold is chosen on val only and applied unchanged to test, so the selection
+cannot leak.
 """
 import json
 
@@ -14,12 +16,12 @@ from train import make_input
 
 fasttext.FastText.eprint = lambda x: None
 
-# 스윕 상위 + 소형 후보 (sweep_results.csv 기준)
+# top sweep entries plus the small candidates (from sweep_results.csv)
 CANDIDATES = [
-    {"dim": 16, "bucket": 250_000, "minn": 2, "maxn": 4, "jamo": False, "lr": 0.125},  # 최고 F1
-    {"dim": 32, "bucket": 50_000, "minn": 2, "maxn": 5, "jamo": False, "lr": 0.5},     # ≤5MB 최고
-    {"dim": 16, "bucket": 100_000, "minn": 2, "maxn": 5, "jamo": False, "lr": 0.5},    # 최소형
-    {"dim": 32, "bucket": 100_000, "minn": 2, "maxn": 4, "jamo": True, "lr": 0.5},     # 자모 최고
+    {"dim": 16, "bucket": 250_000, "minn": 2, "maxn": 4, "jamo": False, "lr": 0.125},  # best F1
+    {"dim": 32, "bucket": 50_000, "minn": 2, "maxn": 5, "jamo": False, "lr": 0.5},     # best under 5MB
+    {"dim": 16, "bucket": 100_000, "minn": 2, "maxn": 5, "jamo": False, "lr": 0.5},    # smallest
+    {"dim": 32, "bucket": 100_000, "minn": 2, "maxn": 4, "jamo": True, "lr": 0.5},     # best jamo variant
 ]
 
 

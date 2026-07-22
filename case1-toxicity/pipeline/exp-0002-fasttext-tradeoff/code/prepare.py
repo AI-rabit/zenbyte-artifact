@@ -1,11 +1,13 @@
-"""exp-0002 데이터 준비: 병합 → 정규화 → 중복 제거 → 층화 분할 → fastText 포맷.
+"""exp-0002 data preparation: merge → normalize → deduplicate → stratified
+split → fastText format.
 
-라벨 정의 (이진): 1 = 부적절(욕설/혐오/악플), 0 = 정상
-- curse_detection: 원 라벨 그대로 (1=욕설)
-- hatescore: 혐오발언/단순 악플 → 1, Clean → 0
+Label definition (binary): 1 = inappropriate (profanity / hate / abuse), 0 = ordinary
+- curse_detection: original labels kept as-is (1 = profanity)
+- hatescore: hate speech and plain abuse → 1, Clean → 0
 
-분할: train 70 / val 10 / test 20 (층화, seed=42). test는 최종 보고 전까지 봉인.
-출력: ../data/{train,val,test}.txt (fastText), ../data/{train,val,test}.csv (공용)
+Split: train 70 / val 10 / test 20 (stratified, seed=42). The test split stays
+sealed until the final report.
+Output: ../data/{train,val,test}.txt (fastText) and ../data/{train,val,test}.csv (shared)
 """
 import re
 import unicodedata
@@ -38,9 +40,9 @@ def load_all() -> pd.DataFrame:
     df = df[df["text"].str.len() > 0]
     before = len(df)
     df = df.drop_duplicates(subset="text", keep="first").reset_index(drop=True)
-    print(f"병합 {before} → 중복 제거 후 {len(df)}")
-    print(f"라벨 분포: {df['label'].value_counts().to_dict()} (양성 비율 {df['label'].mean():.3f})")
-    print(f"출처 분포:\n{df['origin'].value_counts()}")
+    print(f"merged {before} → {len(df)} after deduplication")
+    print(f"label distribution: {df['label'].value_counts().to_dict()} (positive rate {df['label'].mean():.3f})")
+    print(f"source distribution:\n{df['origin'].value_counts()}")
     return df
 
 
@@ -53,7 +55,7 @@ def main():
         with open(DATA / f"{name}.txt", "w", encoding="utf-8") as f:
             for _, r in part.iterrows():
                 f.write(f"__label__{r['label']} {r['text']}\n")
-        print(f"{name}: {len(part)}건 (양성 {part['label'].mean():.3f})")
+        print(f"{name}: {len(part)} rows (positive {part['label'].mean():.3f})")
 
 
 if __name__ == "__main__":

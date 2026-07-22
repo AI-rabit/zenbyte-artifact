@@ -1,7 +1,10 @@
-"""exp-0002 공용: 평가 지표, int8 직렬화 크기 산정, 자모 분해, NaN 재시도 학습.
+"""exp-0002 shared helpers: metrics, int8 serialized-size estimation, jamo
+decomposition, and training with retries on NaN.
 
-주의: 이 fastText 빌드는 seed 파라미터가 없어 학습이 확률적이다 (thread=1이어도).
-따라서 (1) NaN 발산은 재시도로 흡수하고, (2) 최종 후보 성능은 반복 실행 평균으로 보고한다.
+Note: this fastText build exposes no seed parameter, so training is stochastic
+even at thread=1. Consequently (1) NaN divergence is absorbed by retrying, and
+(2) the performance of a final candidate is reported as a mean over repeated
+runs.
 """
 from pathlib import Path
 
@@ -11,7 +14,7 @@ import pandas as pd
 DATA = Path(__file__).parent.parent / "data"
 ARTIFACTS = Path(__file__).parent.parent / "artifacts"
 
-# 한글 음절 → 자모 분해 (초성/중성/종성)
+# Hangul syllable → jamo decomposition (onset / nucleus / coda)
 _CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
 _JUNG = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ"
 _JONG = [""] + list("ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ")
@@ -43,10 +46,10 @@ def f1_binary(y_true, y_pred, positive=1):
 
 
 def int8_serialized_bytes(model) -> int:
-    """Kotlin 반입용 int8 직렬화 크기 산정 (실측 기반).
+    """Estimate the int8 serialized size for porting to Kotlin (measured, not guessed).
 
-    입력 행렬 (nwords+bucket, dim) int8 + 행별 scale float32
-    + 출력 행렬 (n_labels, dim) float32 + 어휘 문자열.
+    Input matrix (nwords+bucket, dim) as int8 + a per-row float32 scale
+    + output matrix (n_labels, dim) as float32 + the vocabulary strings.
     """
     inp = model.get_input_matrix()          # (nwords + bucket, dim) float32
     out = model.get_output_matrix()         # (n_labels, dim) float32
@@ -59,7 +62,7 @@ def load_split(name: str) -> pd.DataFrame:
 
 
 def train_with_retry(max_attempts: int = 6, **kwargs):
-    """NaN 발산 시 동일 lr로 재시도(확률적) → 2회 실패마다 lr 반감. 최종 lr 반환."""
+    """On NaN divergence, retry at the same lr (training is stochastic), halving lr every second failure. Returns the final lr."""
     lr = kwargs.pop("lr", 0.5)
     last = None
     for attempt in range(max_attempts):

@@ -1,7 +1,9 @@
-"""exp-0002 fastText autotune: val 기준 자동 하이퍼파라미터 탐색 (5분 예산).
+"""exp-0002 fastText autotune: automatic hyperparameter search against val
+(5-minute budget).
 
-수동 그리드가 F1~0.75 고원에 머물러, 내장 최적화기로 탐색 공간(loss, lr, epoch,
-ngram, dim, dsub 등)을 넓혀 고원이 진짜인지 확인한다.
+The manual grid stalled at a plateau around F1 ≈ 0.75, so the built-in
+optimizer is used to widen the search space (loss, lr, epoch, ngram, dim, dsub
+and so on) and check whether that plateau is real.
 """
 import json
 import sys
@@ -34,7 +36,7 @@ p1 = prob_positive(model, val["text"].tolist())
 y = val["label"].tolist()
 best = max(((th, f1_binary(y, (p1 >= th).astype(int).tolist()))
             for th in np.arange(0.05, 0.95, 0.025)), key=lambda x: x[1]["f1"])
-print(f"autotune 모델: int8={int8_serialized_bytes(model)/2**20:.2f}MB, "
+print(f"autotune model: int8={int8_serialized_bytes(model)/2**20:.2f}MB, "
       f"argmax F1={f1_binary(y, [int(p >= 0.5) for p in p1])['f1']:.4f}, "
       f"th={best[0]:.3f} F1={best[1]['f1']:.4f} (P={best[1]['precision']:.3f} R={best[1]['recall']:.3f})")
 model.save_model(str(ARTIFACTS / "autotune_best.bin"))

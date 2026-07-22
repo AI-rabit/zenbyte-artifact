@@ -1,8 +1,9 @@
-"""exp-0002 EDA: 데이터셋 2종의 분포·중복·난독화 패턴 확인.
+"""exp-0002 EDA: distribution, duplication and obfuscation patterns of the two
+datasets.
 
-실행: .venv-research 활성화 후 `python eda.py`
-입력: ../data/curse_detection.txt (2runo, MIT), ../data/hatescore.csv (Apache-2.0)
-출력: stdout 리포트 (log.md에 기록용)
+Run: activate the research virtualenv, then `python eda.py`
+Input: ../data/curse_detection.txt (2runo, MIT), ../data/hatescore.csv (Apache-2.0)
+Output: a stdout report (to be pasted into the experiment log)
 """
 import re
 from pathlib import Path
@@ -15,7 +16,7 @@ DATA = Path(__file__).parent.parent / "data"
 def load_curse() -> pd.DataFrame:
     rows, bad = [], 0
     for line in (DATA / "curse_detection.txt").read_text(encoding="utf-8").splitlines():
-        # 포맷: 문장|라벨  (문장 내 '|' 가능성 → rsplit)
+        # format: sentence|label  (a sentence may contain '|', hence rpartition)
         if "|" not in line:
             bad += 1
             continue
@@ -25,40 +26,41 @@ def load_curse() -> pd.DataFrame:
             bad += 1
             continue
         rows.append((text.strip(), int(label)))
-    print(f"[curse] 파싱 실패 라인: {bad}")
+    print(f"[curse] unparsable lines: {bad}")
     return pd.DataFrame(rows, columns=["text", "label"])
 
 
 def load_hatescore() -> pd.DataFrame:
     df = pd.read_csv(DATA / "hatescore.csv", index_col=0)
-    print(f"[hatescore] 컬럼: {list(df.columns)}")
-    print(f"[hatescore] macrolabel 분포:\n{df['macrolabel'].value_counts()}")
-    print(f"[hatescore] microlabel 상위:\n{df['microlabel'].value_counts().head(12)}")
-    print(f"[hatescore] source 분포:\n{df['source'].value_counts()}")
-    # 이진화: 혐오발언 계열 → 1, 그 외(일반문장 등) → 0  (정확한 매핑은 분포 확인 후 확정)
+    print(f"[hatescore] columns: {list(df.columns)}")
+    print(f"[hatescore] macrolabel distribution:\n{df['macrolabel'].value_counts()}")
+    print(f"[hatescore] top microlabels:\n{df['microlabel'].value_counts().head(12)}")
+    print(f"[hatescore] source distribution:\n{df['source'].value_counts()}")
+    # binarization: hate-speech family → 1, everything else (ordinary sentences, ...) → 0
+    # (the exact mapping is fixed once the distribution above has been inspected)
     return df
 
 
 def report(df: pd.DataFrame, name: str):
     print(f"\n===== {name} =====")
-    print(f"행 수: {len(df)}")
-    print(f"라벨 분포:\n{df['label'].value_counts(normalize=True).round(3)}")
+    print(f"rows: {len(df)}")
+    print(f"label distribution:\n{df['label'].value_counts(normalize=True).round(3)}")
     dup = df.duplicated(subset="text").sum()
-    print(f"완전 중복 문장: {dup}")
+    print(f"exact duplicate sentences: {dup}")
     df["len"] = df["text"].str.len()
-    print(f"길이: median={df['len'].median():.0f}, p95={df['len'].quantile(0.95):.0f}, max={df['len'].max()}")
+    print(f"length: median={df['len'].median():.0f}, p95={df['len'].quantile(0.95):.0f}, max={df['len'].max()}")
     empty = (df["text"].str.strip() == "").sum()
-    print(f"빈 문장: {empty}")
-    # 난독화 패턴 표본
+    print(f"blank sentences: {empty}")
+    # sample of obfuscation patterns
     obfus = {
-        "숫자 삽입형 (시1발 등)": r"[가-힣]\d[가-힣]",
-        "자모 단독형 (ㅅㅂ, ㅄ 등)": r"[ㄱ-ㅎㅏ-ㅣ]{2,}",
-        "특수문자 삽입형": r"[가-힣][@#$%^&*~\-_.]+[가-힣]",
+        "digit infix (e.g. 시1발)": r"[가-힣]\d[가-힣]",
+        "bare jamo (e.g. ㅅㅂ, ㅄ)": r"[ㄱ-ㅎㅏ-ㅣ]{2,}",
+        "punctuation infix": r"[가-힣][@#$%^&*~\-_.]+[가-힣]",
     }
     pos = df[df["label"] == 1] if "label" in df else df
     for desc, pat in obfus.items():
         hits = pos["text"].str.contains(pat, regex=True).sum()
-        print(f"난독화 [{desc}]: label=1 중 {hits}건 ({hits/max(len(pos),1)*100:.1f}%)")
+        print(f"obfuscation [{desc}]: {hits} of the label=1 rows ({hits/max(len(pos),1)*100:.1f}%)")
 
 
 if __name__ == "__main__":
@@ -66,13 +68,13 @@ if __name__ == "__main__":
     report(curse, "2runo Curse-detection (MIT)")
 
     hs = load_hatescore()
-    # 이진 라벨 매핑은 분포 출력을 본 뒤 아래에서 확정한다
-    print("\n[hatescore] macrolabel별 표본:")
+    # the binary label mapping is fixed below, after inspecting the printed distribution
+    print("\n[hatescore] a sample per macrolabel:")
     for lbl in hs["macrolabel"].unique():
         sample = hs[hs["macrolabel"] == lbl]["comment"].iloc[0]
         print(f"  {lbl}: {str(sample)[:60]}")
 
-    # 두 데이터셋 교차 중복
+    # cross-dataset duplication
     hs_texts = set(hs["comment"].astype(str).str.strip())
     cross = curse["text"].isin(hs_texts).sum()
-    print(f"\n데이터셋 간 교차 중복: {cross}건")
+    print(f"\ncross-dataset duplicates: {cross}")

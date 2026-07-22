@@ -1,11 +1,18 @@
-"""exp-0002 데이터 증강 실험: unsmile 추가가 고원(F1~0.78)을 뚫는가.
+"""exp-0002 data augmentation: does adding unsmile break through the plateau
+at F1 ≈ 0.78?
 
-설계:
-- unsmile(train+valid tsv 전량)을 **우리 train에만** 추가. val/test는 불변 (비교 가능성 유지).
-- 우리 val/test와 문장 중복 제거 (평가 누수 방지).
-- 라벨: clean=1 → 0, 그 외(혐오 카테고리/악플·욕설) → 1.
-- fastText 확률성 대응: 증강 전/후 각 5회 반복 → mean±std 비교.
-- 라이선스: CC-BY-NC-ND 4.0 — PoC 한정 사용, 상업화 시 재학습 (spec 제약).
+Design:
+- unsmile (all of train+valid tsv) is added to **our train split only**. val and
+  test are left untouched, so results stay comparable.
+- sentences overlapping our val/test are dropped (no evaluation leakage).
+- labels: clean=1 → 0, everything else (hate categories, abuse and profanity) → 1.
+- to cope with fastText's stochasticity: 5 repeats before and after augmentation,
+  compared as mean±std.
+- license: CC-BY-NC-ND 4.0 — PoC use only; commercial use would require
+  retraining (a constraint recorded in the spec).
+
+Note: the Korean strings below are column names in the unsmile dataset and are
+kept verbatim.
 """
 import json
 import statistics
@@ -23,8 +30,9 @@ def normalize(text: str) -> str:
 
 
 def build_augmented_train(targeted: bool = False) -> str:
-    """targeted=True: 우리 라벨 정의와 가장 가까운 '악플/욕설' 양성 + clean 음성만 추가
-    (혐오 카테고리 전용 행은 제외 — 라벨 기준 불일치 가설 검증)."""
+    """targeted=True: add only the positives closest to our own label definition
+    (the '악플/욕설' abuse/profanity column) plus clean negatives, excluding rows
+    that are hate-category only — this tests the label-mismatch hypothesis."""
     path = DATA / ("train.aug-targeted.txt" if targeted else "train.aug.txt")
     base = load_split("train")
     held = set(load_split("val")["text"]) | set(load_split("test")["text"]) | set(base["text"])
@@ -40,7 +48,7 @@ def build_augmented_train(targeted: bool = False) -> str:
     before = len(un)
     un = un[(un["text"].str.len() > 0) & (~un["text"].isin(held))]
     un = un.drop_duplicates(subset="text")
-    print(f"unsmile {before} → 누수·중복 제거 후 {len(un)} (양성 {un['label'].mean():.3f})")
+    print(f"unsmile {before} → {len(un)} after removing leakage and duplicates (positive {un['label'].mean():.3f})")
 
     with open(path, "w", encoding="utf-8") as f:
         for _, r in base.iterrows():
@@ -49,7 +57,7 @@ def build_augmented_train(targeted: bool = False) -> str:
             f.write(f"__label__{r['label']} {r['text']}\n")
     total_pos = base["label"].sum() + un["label"].sum()
     total = len(base) + len(un)
-    print(f"증강 train: {total}건 (양성 {total_pos}건, {total_pos/total:.3f})")
+    print(f"augmented train: {total} rows (positive {total_pos}, {total_pos/total:.3f})")
     return str(path)
 
 
@@ -90,13 +98,13 @@ def main():
     if "--targeted" in sys.argv:
         aug = build_augmented_train(targeted=True)
         for cname, cfg in CONFIGS.items():
-            run_arm(f"{cname}/표적증강", cfg, aug)
+            run_arm(f"{cname}/targeted-aug", cfg, aug)
         return
     aug = build_augmented_train()
     plain = str(DATA / "train.raw.txt")
     for cname, cfg in CONFIGS.items():
-        run_arm(f"{cname}/기존", cfg, plain)
-        run_arm(f"{cname}/증강", cfg, aug)
+        run_arm(f"{cname}/baseline", cfg, plain)
+        run_arm(f"{cname}/augmented", cfg, aug)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,15 @@
-"""exp-0002 fastText 학습·평가 (단일 설정 실행 및 스윕의 공용 엔진).
+"""exp-0002 fastText training and evaluation (the shared engine for both a
+single run and the sweep).
 
-사용:
-  python train.py                       # 기본 설정 1회 (스켈레톤 확인용)
-  python train.py --sweep               # 그리드 스윕 → ../artifacts/sweep_results.csv
+Usage:
+  python train.py                       # one run at the default config (skeleton check)
+  python train.py --sweep               # grid sweep → ../artifacts/sweep_results.csv
 
-평가: val set 기준 (test는 동작점 확정 후 최종 1회만 사용).
-크기: int8 직렬화 실측 산정 (common.int8_serialized_bytes).
-재현성: thread=1 고정 (fastText는 멀티스레드 시 비결정적).
+Evaluation: on the val set (test is opened exactly once, after the operating
+point is fixed).
+Size: measured int8 serialized size (common.int8_serialized_bytes).
+Reproducibility: thread=1 is fixed, since fastText is non-deterministic when
+multi-threaded.
 """
 import argparse
 import itertools
@@ -19,11 +22,11 @@ import pandas as pd
 
 from common import ARTIFACTS, DATA, f1_binary, int8_serialized_bytes, jamo_decompose, load_split
 
-fasttext.FastText.eprint = lambda x: None  # 경고 출력 억제
+fasttext.FastText.eprint = lambda x: None  # silence warning output
 
 
 def make_input(split: str, jamo: bool) -> Path:
-    """fastText 입력 파일 생성 (자모 분해 옵션 반영)."""
+    """Build the fastText input file, applying the jamo-decomposition option."""
     suffix = "jamo" if jamo else "raw"
     path = DATA / f"{split}.{suffix}.txt"
     if path.exists():
@@ -47,7 +50,8 @@ def evaluate(model, split: str, jamo: bool) -> dict:
 def run_config(cfg: dict) -> dict:
     train_path = make_input("train", cfg["jamo"])
     t0 = time.time()
-    # lr이 큰 일부 설정에서 fastText가 NaN으로 발산 → lr 반감 재시도 (최종 lr 기록)
+    # at larger lr some configurations diverge to NaN → retry with lr halved
+    # (the lr that finally worked is recorded)
     lr = cfg.get("lr", 0.5)
     for attempt in range(5):
         try:
@@ -102,9 +106,10 @@ def main():
             rows.append(result)
             print(f"[{i}/{len(combos)}] {cfg} → F1={result['f1']:.3f}, {result['int8_mb']}MB")
         except RuntimeError as e:
-            # 발산 설정도 기록한다 — 실패도 트레이드오프 곡선의 데이터다
+            # diverged configurations are recorded too — a failure is still a point
+            # on the trade-off curve
             rows.append({**cfg, "f1": None, "error": str(e)})
-            print(f"[{i}/{len(combos)}] {cfg} → 발산(NaN), 기록 후 계속")
+            print(f"[{i}/{len(combos)}] {cfg} → diverged (NaN); recorded, continuing")
     df = pd.DataFrame(rows).sort_values("f1", ascending=False)
     df.to_csv(ARTIFACTS / "sweep_results.csv", index=False)
     print(df.head(10).to_string())
