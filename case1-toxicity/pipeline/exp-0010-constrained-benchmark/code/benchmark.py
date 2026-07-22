@@ -1,13 +1,17 @@
-"""exp-0010 제약 조건 하 정량 벤치마크.
+"""exp-0010 quantitative benchmark under the deployment constraints.
 
-후보 6종 × 학습조건 2종(골드만 / 골드+증류) × (F1, 크기, 지연)을 동일 조건에서 측정한다.
+Six candidates × two training conditions (gold only / gold+distilled) are
+measured on (F1, size, latency) under identical conditions.
 
-공정성 규칙:
-  - 모든 후보에 동일 train/val/test, 동일 증류 데이터.
-  - 하이퍼파라미터는 후보마다 val에서 동일한 예산으로 탐색 (한쪽만 튜닝하지 않는다).
-  - 임계값은 val에서 선택 → test에 1회 적용.
-  - 크기는 **동일한 int8 직렬화 규칙**으로 실측 (이론값 금지).
-  - 지연은 같은 머신·같은 문장·같은 반복 수로 측정.
+Fairness rules:
+  - every candidate sees the same train/val/test and the same distilled data.
+  - hyperparameters are searched on val with the same budget for each candidate;
+    no candidate is tuned while another is not.
+  - the threshold is chosen on val and applied once to test.
+  - size is **measured under the same int8 serialization rule** for all — no
+    theoretical figures.
+  - latency is measured on the same machine, the same sentences and the same
+    number of repetitions.
 """
 import json
 import sys
@@ -44,7 +48,7 @@ def build_train_sets():
     conf = pool[(pool["teacher_prob"] >= CONF) | (pool["teacher_prob"] <= 1 - CONF)]
     pseudo = pd.DataFrame({"text": conf["text"], "label": (conf["teacher_prob"] >= 0.5).astype(int)})
     distilled = pd.concat([ours, pseudo], ignore_index=True)
-    return {"골드만": ours, "골드+증류": distilled}
+    return {"gold only": ours, "gold+distilled": distilled}
 
 
 def pick_threshold(y, p):
@@ -53,18 +57,18 @@ def pick_threshold(y, p):
 
 
 def sklearn_size_bytes(vec, clf) -> int:
-    """배포 시 실제로 반입해야 하는 바이트 수 (fastText와 동일한 int8 규칙 적용).
+    """The bytes that would actually have to ship, under the same int8 rule as fastText.
 
-    - 어휘 문자열 (UTF-8 + 길이 prefix)
-    - idf 벡터: float32
-    - 계수: int8 + scale 1개 (행 1개짜리 선형 모델)
+    - vocabulary strings (UTF-8 plus a length prefix)
+    - the idf vector: float32
+    - coefficients: int8 plus one scale (a linear model with a single row)
     """
     vocab = vec.vocabulary_
     vocab_bytes = sum(len(t.encode("utf-8")) + 2 for t in vocab)
     idf_bytes = len(vocab) * 4
-    # NB는 coef_ 대신 클래스별 로그확률(feature_log_prob_)을 반입해야 한다
+    # NB ships per-class log probabilities (feature_log_prob_) rather than coef_
     weights = clf.coef_ if hasattr(clf, "coef_") else clf.feature_log_prob_
-    coef_bytes = np.asarray(weights).size * 1 + 4 * np.asarray(weights).shape[0]  # int8 + 행별 scale
+    coef_bytes = np.asarray(weights).size * 1 + 4 * np.asarray(weights).shape[0]  # int8 plus a per-row scale
     return vocab_bytes + idf_bytes + coef_bytes + 4  # + intercept
 
 
@@ -76,7 +80,7 @@ def eval_sklearn(name, vec, clf, tr, val, test, decision_fn):
     pt = decision_fn(clf, vec.transform(test["text"]))
     m = f1_binary(test["label"].tolist(), (pt >= th).astype(int).tolist())
 
-    # 지연 (문장 1건씩 — 실사용 시나리오)
+    # latency, one sentence at a time — the realistic usage pattern
     texts = test["text"].tolist()[:200]
     for t in texts[:20]:
         decision_fn(clf, vec.transform([t]))  # warm-up
@@ -99,7 +103,7 @@ def lr_proba(clf, X):
 
 def svm_decision(clf, X):
     d = clf.decision_function(X)
-    return 1 / (1 + np.exp(-d))  # 시그모이드로 [0,1] 사상 (임계값 튜닝을 위해)
+    return 1 / (1 + np.exp(-d))  # map to [0,1] with a sigmoid, so the threshold can be tuned
 
 
 def eval_fasttext(tr, val, test):
@@ -113,7 +117,7 @@ def eval_fasttext(tr, val, test):
 
     texts = test["text"].tolist()[:200]
     for t in texts[:20]:
-        model.predict([t], k=2)  # 단일 문자열 predict는 numpy2 비호환 → 리스트 경로 사용
+        model.predict([t], k=2)  # predict on a bare string is numpy2-incompatible; use the list path
     times = []
     for i in range(LATENCY_N):
         t0 = time.perf_counter()
@@ -138,7 +142,7 @@ def eval_keyword(test):
         times.append((time.perf_counter() - t0) * 1000)
     times.sort()
     size = sum(len(w.encode()) + 2 for w in LEXICON)
-    return {"model": "키워드 사전", "val_f1": None, "th": None,
+    return {"model": "keyword lexicon", "val_f1": None, "th": None,
             "precision": round(m["precision"], 4), "recall": round(m["recall"], 4),
             "f1": round(m["f1"], 4), "size_mb": round(size / 2**20, 4),
             "p50_ms": round(times[len(times)//2], 3), "p95_ms": round(times[int(len(times)*0.95)], 3),
@@ -153,42 +157,42 @@ def main():
     rows = []
     kw = eval_keyword(test)
     for cond in train_sets:
-        rows.append({"조건": "—", **kw})
-        break  # 키워드는 학습이 없으므로 1회만
+        rows.append({"condition": "—", **kw})
+        break  # the keyword baseline has no training, so it is reported once
 
     for cond, tr in train_sets.items():
-        print(f"\n=== 학습 조건: {cond} (n={len(tr)}) ===")
+        print(f"\n=== training condition: {cond} (n={len(tr)}) ===")
 
         # TF-IDF(word) + LR
         r = eval_sklearn("TF-IDF(word)+LR",
                          TfidfVectorizer(ngram_range=(1, 2), min_df=2, sublinear_tf=True),
                          LogisticRegression(max_iter=2000, C=1.0), tr, val, test, lr_proba)
-        rows.append({"조건": cond, **r}); print(" ", r)
+        rows.append({"condition": cond, **r}); print(" ", r)
 
-        # TF-IDF(char) + LR  ← fastText subword의 직접 경쟁자
+        # TF-IDF(char) + LR  ← the direct competitor to fastText's subwords
         r = eval_sklearn("TF-IDF(char2-5)+LR",
                          TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 5),
                                          min_df=2, sublinear_tf=True, max_features=500_000),
                          LogisticRegression(max_iter=2000, C=1.0), tr, val, test, lr_proba)
-        rows.append({"조건": cond, **r}); print(" ", r)
+        rows.append({"condition": cond, **r}); print(" ", r)
 
         # TF-IDF(char) + LinearSVM
         r = eval_sklearn("TF-IDF(char2-5)+SVM",
                          TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 5),
                                          min_df=2, sublinear_tf=True, max_features=500_000),
                          LinearSVC(C=0.5, max_iter=5000), tr, val, test, svm_decision)
-        rows.append({"조건": cond, **r}); print(" ", r)
+        rows.append({"condition": cond, **r}); print(" ", r)
 
         # Naive Bayes (char)
         r = eval_sklearn("TF-IDF(char2-5)+NB",
                          TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 5),
                                          min_df=2, sublinear_tf=True, max_features=500_000),
                          MultinomialNB(alpha=0.1), tr, val, test, lr_proba)
-        rows.append({"조건": cond, **r}); print(" ", r)
+        rows.append({"condition": cond, **r}); print(" ", r)
 
         # fastText
         r = eval_fasttext(tr, val, test)
-        rows.append({"조건": cond, **r}); print(" ", r)
+        rows.append({"condition": cond, **r}); print(" ", r)
 
     df = pd.DataFrame(rows)
     df.to_csv(ART / "benchmark.csv", index=False)

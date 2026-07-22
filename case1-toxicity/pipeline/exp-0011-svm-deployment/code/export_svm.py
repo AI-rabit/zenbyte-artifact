@@ -45,7 +45,7 @@ SVC_KW = dict(C=0.5, max_iter=5000)
 
 
 def train():
-    tr = build_train_sets()["골드+증류"]
+    tr = build_train_sets()["gold+distilled"]
     vec = TfidfVectorizer(**VEC_KW)
     clf = LinearSVC(**SVC_KW)
     X = vec.fit_transform(tr["text"])

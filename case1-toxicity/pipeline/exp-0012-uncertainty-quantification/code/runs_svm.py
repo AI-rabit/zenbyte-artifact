@@ -58,7 +58,7 @@ def fit_svm(vec_kw, tr, val, test, tag, results):
 def main():
     ensure_dirs()
     sets = build_train_sets()
-    gold, dist = sets["골드만"], sets["골드+증류"]
+    gold, dist = sets["gold only"], sets["gold+distilled"]
     val, test = load_split("val"), load_split("test")
     results = {}
 

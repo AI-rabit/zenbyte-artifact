@@ -1,11 +1,14 @@
-"""exp-0010 공정 재튜닝: 증류 데이터(38k)에서 각 후보를 동일 예산으로 재튜닝한다.
+"""exp-0010 fair re-tuning: every candidate is re-tuned on the distilled data
+(38k) under the same budget.
 
-문제: 1차 벤치마크의 fastText 설정(OP)은 **골드 데이터(11.8k)에서 튜닝**된 것이다.
-증류로 데이터가 3배로 늘었으니, fastText도 더 큰 용량이 최적일 수 있다.
-한쪽만 튜닝된 비교는 불공정하다 (spec의 공정성 규칙).
+The problem: the fastText configuration (OP) used in the first benchmark was
+**tuned on the gold data (11.8k)**. Distillation tripled the data, so a larger
+capacity may now be optimal for fastText too, and a comparison in which only
+one side is tuned is unfair (the fairness rule in the spec).
 
-→ 두 후보에 동일한 탐색 예산(각 12설정)을 주고 val에서 최적점을 찾은 뒤,
-   그 최적점끼리 test에서 비교한다. 크기 예산 15MB를 넘는 설정은 실격 처리.
+→ Both candidates are given the same search budget (12 configurations each),
+   their optima are found on val, and those optima are then compared on test.
+   Any configuration above the 15MB size budget is disqualified.
 """
 import sys
 from pathlib import Path
@@ -29,11 +32,11 @@ BUDGET_MB = 15.0
 
 
 def main():
-    tr = build_train_sets()["골드+증류"]
+    tr = build_train_sets()["gold+distilled"]
     val, test = load_split("val"), load_split("test")
     yv, yt = val["label"].tolist(), test["label"].tolist()
 
-    print("=== fastText 재튜닝 (증류 데이터 38k, val) — 12설정 ===")
+    print("=== fastText re-tuning (distilled data, 38k, on val) — 12 configurations ===")
     ft_rows = []
     for dim in (16, 32):
         for bucket in (250_000, 500_000, 1_000_000):
@@ -47,11 +50,11 @@ def main():
                 mb = int8_serialized_bytes(model) / 2**20
                 ok = mb <= BUDGET_MB
                 ft_rows.append({**cfg, "val_f1": round(f1v, 4), "th": round(float(th), 3),
-                                "size_mb": round(mb, 2), "예산내": ok, "_model": model})
+                                "size_mb": round(mb, 2), "within_budget": ok, "_model": model})
                 print(f"  dim{dim} bucket{bucket//1000}k n{minmax} → val {f1v:.4f}, {mb:.2f}MB"
-                      f"{'' if ok else '  ❌예산초과'}")
+                      f"{'' if ok else '  ❌ over budget'}")
 
-    print("\n=== TF-IDF(char)+SVM 재튜닝 (동일 예산 12설정) ===")
+    print("\n=== TF-IDF(char)+SVM re-tuning (same budget, 12 configurations) ===")
     svm_rows = []
     for ngram in ((2, 4), (2, 5), (2, 6)):
         for max_feat in (200_000, 500_000):
@@ -67,16 +70,16 @@ def main():
                 ok = mb <= BUDGET_MB
                 svm_rows.append({"ngram": ngram, "max_feat": max_feat, "C": C,
                                  "val_f1": round(f1v, 4), "th": round(float(th), 3),
-                                 "size_mb": round(mb, 2), "예산내": ok,
+                                 "size_mb": round(mb, 2), "within_budget": ok,
                                  "_vec": vec, "_clf": clf})
                 print(f"  ngram{ngram} feat{max_feat//1000}k C{C} → val {f1v:.4f}, {mb:.2f}MB"
-                      f"{'' if ok else '  ❌예산초과'}")
+                      f"{'' if ok else '  ❌ over budget'}")
 
-    # 예산 내 최적점끼리 test 비교
-    ft_best = max((r for r in ft_rows if r["예산내"]), key=lambda r: r["val_f1"])
-    svm_best = max((r for r in svm_rows if r["예산내"]), key=lambda r: r["val_f1"])
+    # compare the in-budget optima on test
+    ft_best = max((r for r in ft_rows if r["within_budget"]), key=lambda r: r["val_f1"])
+    svm_best = max((r for r in svm_rows if r["within_budget"]), key=lambda r: r["val_f1"])
 
-    print("\n=== 예산 내 최적점 test 비교 (임계값은 val에서 선택) ===")
+    print("\n=== in-budget optima compared on test (threshold chosen on val) ===")
     pt = prob_pos(ft_best["_model"], test["text"])
     m_ft = f1_binary(yt, (pt >= ft_best["th"]).astype(int).tolist())
     print(f"  fastText  dim{ft_best['dim']} bucket{ft_best['bucket']} n({ft_best['minn']},{ft_best['maxn']}): "
@@ -89,7 +92,7 @@ def main():
           f"val {svm_best['val_f1']:.4f} → test F1 {m_svm['f1']:.4f} "
           f"(P {m_svm['precision']:.4f} R {m_svm['recall']:.4f}), {svm_best['size_mb']}MB")
 
-    print(f"\n  차이: SVM - fastText = {m_svm['f1'] - m_ft['f1']:+.4f} F1, "
+    print(f"\n  difference: SVM - fastText = {m_svm['f1'] - m_ft['f1']:+.4f} F1, "
           f"{svm_best['size_mb'] - ft_best['size_mb']:+.2f}MB")
 
     pd.DataFrame([{k: v for k, v in r.items() if not k.startswith('_')} for r in ft_rows]) \

@@ -1,11 +1,15 @@
-"""exp-0009 1단계: 교사(KcELECTRA) 학습 + 무라벨 풀 재라벨링.
+"""exp-0009 stage 1: train the teacher (KcELECTRA) and relabel the unlabelled
+pool.
 
-엄격성 요건:
-  - 교사는 **우리 train만** 본다. val/test는 절대 미사용 (누수 차단).
-  - 무라벨 풀은 외부 텍스트만. **원 라벨은 즉시 폐기**하고, 우리 val/test와 겹치는 문장을 제거.
-  - 누수 검증을 코드로 수행하고 실패 시 중단한다.
+Rigour requirements:
+  - the teacher sees **our train split only**; val and test are never used, so
+    nothing can leak.
+  - the pool is external text only. **The original labels are discarded
+    immediately**, and any sentence overlapping our val/test is removed.
+  - the leakage check runs in code and aborts the script on failure.
 
-산출물: artifacts/pseudo_labels.csv  (text, teacher_prob, orig_label[대조군용])
+Output: artifacts/pseudo_labels.csv (text, teacher_prob, orig_label — the last
+kept only for the control arm).
 """
 import sys
 from pathlib import Path
@@ -26,11 +30,11 @@ from datasets_survey import load_all  # noqa: E402
 from kcelectra import BATCH, LR, MAXLEN, MODEL, SEED, TextDS  # noqa: E402
 
 ART = Path(__file__).parent.parent / "artifacts"
-EPOCHS = 2  # exp-0002에서 val 최고였던 지점
+EPOCHS = 2  # the point that was best on val in exp-0002
 
 
 def build_pool() -> pd.DataFrame:
-    """외부 텍스트만 모은 무라벨 풀. 원 라벨은 대조군 분석용으로만 보관한다."""
+    """The unlabelled pool: external text only. Original labels are retained solely for the control analysis."""
     data = load_all()
     ours_train = set(load_split("train")["text"])
     ours_val = set(load_split("val")["text"])
@@ -39,21 +43,21 @@ def build_pool() -> pd.DataFrame:
     frames = [data[k].assign(source=k) for k in ("unsmile", "APEACH", "kor-hate-sentence")]
     pool = pd.concat(frames, ignore_index=True).drop_duplicates(subset="text")
 
-    # 누수 차단: 우리 데이터(train 포함)와 겹치는 문장 전부 제거
+    # leakage barrier: drop every sentence overlapping our data, train included
     before = len(pool)
     pool = pool[~pool["text"].isin(ours_train | ours_val | ours_test)].reset_index(drop=True)
-    print(f"무라벨 풀: {before} → 누수 제거 후 {len(pool)}건")
+    print(f"unlabelled pool: {before} → {len(pool)} after removing leakage")
 
-    # 누수 검증 (실패 시 중단)
-    assert not pool["text"].isin(ours_val).any(), "❌ 풀에 val 문장이 남아있음"
-    assert not pool["text"].isin(ours_test).any(), "❌ 풀에 test 문장이 남아있음"
-    print("✅ 누수 검증 통과 (풀 ∩ val = ∅, 풀 ∩ test = ∅)")
+    # leakage assertions (abort on failure)
+    assert not pool["text"].isin(ours_val).any(), "❌ val sentences remain in the pool"
+    assert not pool["text"].isin(ours_test).any(), "❌ test sentences remain in the pool"
+    print("✅ leakage check passed (pool ∩ val = ∅, pool ∩ test = ∅)")
 
     return pool.rename(columns={"label": "orig_label"})[["text", "orig_label", "source"]]
 
 
 def train_teacher():
-    """우리 train만으로 교사 학습. val은 성능 확인용으로만 본다(파라미터는 exp-0002에서 고정)."""
+    """Train the teacher on our train split alone. val is inspected only to report performance; the hyperparameters were fixed back in exp-0002."""
     torch.manual_seed(SEED)
     np.random.seed(SEED)
     device = "cuda"
@@ -93,30 +97,31 @@ def main():
     ART.mkdir(exist_ok=True)
     pool = build_pool()
 
-    print("\n교사 학습 (우리 train만)…")
+    print("\ntraining the teacher (our train split only)…")
     model, tok = train_teacher()
 
-    # 교사 성능 확인 (val — 파라미터 선택에는 쓰지 않음, 기록용)
+    # teacher performance on val — recorded for the log, never used to select parameters
     val = load_split("val")
     pv = predict_probs(model, tok, val["text"].tolist())
     yv = val["label"].tolist()
     best = max(((th, f1_binary(yv, [int(p >= th) for p in pv]))
                 for th in np.arange(0.05, 0.95, 0.025)), key=lambda x: x[1]["f1"])
-    print(f"교사 val F1 = {best[1]['f1']:.4f} (th={best[0]:.3f})")
+    print(f"teacher val F1 = {best[1]['f1']:.4f} (th={best[0]:.3f})")
 
-    print(f"\n무라벨 풀 {len(pool)}건 재라벨링…")
+    print(f"\nrelabelling the {len(pool)}-row unlabelled pool…")
     pool["teacher_prob"] = predict_probs(model, tok, pool["text"].tolist())
 
-    # 교사가 우리 정의로 본 풀의 양성 비율 vs 원 라벨의 양성 비율 (라벨 정의 차이의 직접 증거)
+    # positive rate the teacher assigns under our definition vs the rate under the
+    # original labels — direct evidence of the label-definition gap
     for th in (0.5,):
         teacher_pos = (pool["teacher_prob"] >= th).mean()
         orig_pos = pool["orig_label"].mean()
         agree = ((pool["teacher_prob"] >= th).astype(int) == pool["orig_label"]).mean()
-        print(f"\n[라벨 정의 차이] 원 라벨 양성률 {orig_pos:.3f} vs 교사(우리 정의) 양성률 {teacher_pos:.3f}")
-        print(f"                 원 라벨과의 일치율: {agree:.3f}")
+        print(f"\n[label-definition gap] positive rate under the original labels {orig_pos:.3f} vs under the teacher, i.e. our definition, {teacher_pos:.3f}")
+        print(f"                 agreement with the original labels: {agree:.3f}")
 
     pool.to_csv(ART / "pseudo_labels.csv", index=False)
-    print(f"\n저장: {ART / 'pseudo_labels.csv'} ({len(pool)}건)")
+    print(f"\nsaved: {ART / 'pseudo_labels.csv'} ({len(pool)} rows)")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,11 @@
-"""exp-0009 최종 평가: 증류 동작점을 봉인된 test에서 1회 평가.
+"""exp-0009 final evaluation: the distilled operating point, scored once on the
+sealed test split.
 
-동작점: ours + 교사 의사라벨(신뢰도 ≥0.9), fastText dim16/bucket500k/minn2-maxn5.
-임계값은 val에서 선택 → test에 그대로 적용 (선택 누수 방지). 3회 반복.
-비교선: exp-0002 기준선(test 0.744), KcELECTRA 교사(test 0.853).
+Operating point: ours + teacher pseudo-labels (confidence ≥0.9), fastText
+dim16 / bucket500k / minn2-maxn5. The threshold is chosen on val and applied
+unchanged to test, so the selection cannot leak. 3 repeats.
+Reference points: the exp-0002 baseline (test 0.744) and the KcELECTRA teacher
+(test 0.853).
 """
 import statistics
 import sys
@@ -30,7 +33,7 @@ def build_train() -> pd.DataFrame:
     pool = pd.read_csv(ART / "pseudo_labels.csv")
     conf = pool[(pool["teacher_prob"] >= CONF) | (pool["teacher_prob"] <= 1 - CONF)]
     pseudo = pd.DataFrame({"text": conf["text"], "label": (conf["teacher_prob"] >= 0.5).astype(int)})
-    print(f"학습셋: ours {len(ours)} + 의사라벨 {len(pseudo)} = {len(ours) + len(pseudo)}건")
+    print(f"training set: ours {len(ours)} + pseudo-labelled {len(pseudo)} = {len(ours) + len(pseudo)} rows")
     return pd.concat([ours, pseudo], ignore_index=True)
 
 
@@ -59,18 +62,18 @@ def main():
 
     f1s = [r["f1"] for r in rows]
     size = int8_serialized_bytes(best_model)
-    print(f"\n=== exp-0009 최종 (test, 1회 개봉) ===")
+    print(f"\n=== exp-0009 final (test, opened once) ===")
     print(f"  test F1 = {statistics.mean(f1s):.4f} ± {statistics.stdev(f1s):.4f}")
-    print(f"  int8 크기 = {size / 2**20:.2f}MB (예산 15MB)")
-    print(f"  선택 임계값 = {best_th:.3f} (val에서 선택)")
-    print(f"\n  비교: 키워드 0.568 | exp-0002 기준선 0.744 | **증류 {statistics.mean(f1s):.3f}** "
-          f"| 교사(KcELECTRA, 420MB) 0.853")
-    print(f"  개선: {statistics.mean(f1s) - 0.7436:+.4f}")
+    print(f"  int8 size = {size / 2**20:.2f}MB (budget 15MB)")
+    print(f"  chosen threshold = {best_th:.3f} (selected on val)")
+    print(f"\n  comparison: keyword 0.568 | exp-0002 baseline 0.744 | **distilled {statistics.mean(f1s):.3f}** "
+          f"| teacher (KcELECTRA, 420MB) 0.853")
+    print(f"  improvement: {statistics.mean(f1s) - 0.7436:+.4f}")
 
     best_model.save_model(str(ART / "operating_point_distilled.bin"))
     (ART / "operating_point_meta.txt").write_text(
         f"threshold={best_th}\ntest_f1_mean={statistics.mean(f1s)}\nint8_bytes={size}\n")
-    print(f"\n  모델 저장: artifacts/operating_point_distilled.bin")
+    print(f"\n  model saved: artifacts/operating_point_distilled.bin")
 
 
 if __name__ == "__main__":

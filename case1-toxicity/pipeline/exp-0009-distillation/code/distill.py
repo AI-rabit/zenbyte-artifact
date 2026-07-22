@@ -1,15 +1,21 @@
-"""exp-0009 2단계: 증류 실험 + 귀인 대조군 (val 기준, test 봉인 유지).
+"""exp-0009 stage 2: the distillation experiment and its attribution controls
+(scored on val; test stays sealed).
 
-팔 구성 (모두 fastText 동작점 설정, 3회 반복 평균):
-  A. 기준선          : ours only
-  B. 교사 증류(전량)  : ours + 풀(교사 하드 라벨)
-  C. 교사 증류(신뢰도): ours + 풀(교사 확신 표본만) — 임계 스윕
-  D. **자기학습 대조**: ours + 풀(학생 fastText 자신이 라벨링)   ← H2 귀인 검증의 핵심
-  E. **원라벨 대조**  : ours + 풀(외부 원래 라벨)                ← exp-0008 재확인
-  F. 풀만 (교사 라벨) : ours 없이 풀만
+The arms (all at the fastText operating point, averaged over 3 repeats):
+  A. baseline               : ours only
+  B. teacher distillation, all      : ours + pool (teacher hard labels)
+  C. teacher distillation, confident: ours + pool (only samples the teacher is
+     confident about) — swept over the confidence threshold
+  D. **self-training control**: ours + pool labelled by the student fastText
+     itself                                    ← the core of the H2 attribution test
+  E. **original-label control**: ours + pool with the external original labels
+                                                ← re-confirms exp-0008
+  F. pool only (teacher labels): the pool without ours
 
-D가 B와 비슷한 이득을 낸다면 "교사의 지식" 귀인은 틀린 것이다 (단순 self-training 효과).
-E는 라벨 정의가 문제였음을 같은 텍스트로 재확인한다 (텍스트 통제, 라벨만 변경).
+If D produces a gain comparable to B, then attributing the improvement to "the
+teacher's knowledge" is wrong — it would be a plain self-training effect.
+E re-confirms that the label definition was the problem, holding the text fixed
+and changing only the labels.
 """
 import statistics
 import sys
@@ -40,13 +46,13 @@ def run(name: str, train_df: pd.DataFrame, val: pd.DataFrame) -> float:
                                     loss="softmax", thread=1, verbose=0, **OP)
         f1s.append(best_f1(val["label"].tolist(), prob_pos(model, val["text"])))
     m, s = statistics.mean(f1s), statistics.stdev(f1s)
-    print(f"  {name:34s} n={len(train_df):6d} 양성={train_df['label'].mean():.3f} "
+    print(f"  {name:34s} n={len(train_df):6d} positive={train_df['label'].mean():.3f} "
           f"→ val F1 = {m:.4f} ± {s:.4f}")
     return m
 
 
 def student_pseudo_labels(ours: pd.DataFrame, pool: pd.DataFrame) -> np.ndarray:
-    """학생(fastText) 자신이 풀에 라벨을 붙인다 — 자기학습 대조군."""
+    """The student (fastText) labels the pool itself — the self-training control."""
     path = write_ft(ours[["text", "label"]], DATA / "student_teacher.txt")
     model, _ = train_with_retry(input=path, wordNgrams=2, epoch=25,
                                 loss="softmax", thread=1, verbose=0, **OP)
@@ -58,59 +64,59 @@ def main():
     val = load_split("val")
     pool = pd.read_csv(ART / "pseudo_labels.csv")
 
-    print(f"풀 {len(pool)}건, 교사 양성률 {(pool['teacher_prob'] >= 0.5).mean():.3f}\n")
+    print(f"pool of {len(pool)} rows, teacher positive rate {(pool['teacher_prob'] >= 0.5).mean():.3f}\n")
 
-    print("=== 기준선 및 대조군 ===")
-    base = run("A. 기준선 (ours only)", ours, val)
+    print("=== baseline and controls ===")
+    base = run("A. baseline (ours only)", ours, val)
 
-    # E. 원라벨 대조 (텍스트 동일, 라벨만 외부 원본)
+    # E. original-label control (same text, only the labels are the external originals)
     e_df = pd.concat([ours, pool[["text", "orig_label"]].rename(columns={"orig_label": "label"})],
                      ignore_index=True)
-    e = run("E. 원라벨 대조 (외부 라벨)", e_df, val)
+    e = run("E. original-label control (external labels)", e_df, val)
 
-    # D. 자기학습 대조 (학생이 라벨링)
+    # D. self-training control (the student does the labelling)
     sp = student_pseudo_labels(ours, pool)
     d_df = pd.concat([ours, pd.DataFrame({"text": pool["text"], "label": (sp >= 0.5).astype(int)})],
                      ignore_index=True)
-    d = run("D. 자기학습 대조 (학생 라벨)", d_df, val)
+    d = run("D. self-training control (student labels)", d_df, val)
 
-    print("\n=== 교사 증류 ===")
-    # B. 전량
+    print("\n=== teacher distillation ===")
+    # B. all of the pool
     b_df = pd.concat([ours, pd.DataFrame({"text": pool["text"],
                                           "label": (pool["teacher_prob"] >= 0.5).astype(int)})],
                      ignore_index=True)
-    b = run("B. 교사 증류 (전량)", b_df, val)
+    b = run("B. teacher distillation (all)", b_df, val)
 
-    # C. 신뢰도 필터 스윕
-    print("\n=== C. 신뢰도 필터 스윕 (교사가 확신하는 표본만) ===")
+    # C. sweep over the confidence filter
+    print("\n=== C. confidence-filter sweep (only samples the teacher is confident about) ===")
     best_c, best_margin = -1.0, None
     for margin in (0.6, 0.7, 0.8, 0.9, 0.95):
         conf = pool[(pool["teacher_prob"] >= margin) | (pool["teacher_prob"] <= 1 - margin)]
         c_df = pd.concat([ours, pd.DataFrame({"text": conf["text"],
                                               "label": (conf["teacher_prob"] >= 0.5).astype(int)})],
                          ignore_index=True)
-        c = run(f"C. 교사 증류 (신뢰도 ≥{margin})", c_df, val)
+        c = run(f"C. teacher distillation (confidence ≥{margin})", c_df, val)
         if c > best_c:
             best_c, best_margin = c, margin
 
-    # F. 풀만
+    # F. pool only
     f_df = pd.DataFrame({"text": pool["text"], "label": (pool["teacher_prob"] >= 0.5).astype(int)})
-    f = run("F. 풀만 (ours 제외)", f_df, val)
+    f = run("F. pool only (ours excluded)", f_df, val)
 
-    print("\n=== 요약 (val) ===")
-    print(f"  A 기준선          : {base:.4f}")
-    print(f"  E 원라벨 대조      : {e:.4f}  ({e - base:+.4f})")
-    print(f"  D 자기학습 대조    : {d:.4f}  ({d - base:+.4f})   ← 귀인 검증")
-    print(f"  B 교사 증류(전량)  : {b:.4f}  ({b - base:+.4f})")
-    print(f"  C 교사 증류(최적)  : {best_c:.4f}  ({best_c - base:+.4f})  @ 신뢰도 {best_margin}")
-    print(f"  F 풀만            : {f:.4f}  ({f - base:+.4f})")
+    print("\n=== summary (val) ===")
+    print(f"  A baseline                 : {base:.4f}")
+    print(f"  E original-label control   : {e:.4f}  ({e - base:+.4f})")
+    print(f"  D self-training control    : {d:.4f}  ({d - base:+.4f})   ← attribution test")
+    print(f"  B teacher distillation, all: {b:.4f}  ({b - base:+.4f})")
+    print(f"  C teacher distillation, best: {best_c:.4f}  ({best_c - base:+.4f})  @ confidence {best_margin}")
+    print(f"  F pool only                : {f:.4f}  ({f - base:+.4f})")
     print()
     if best_c > base and best_c - d > 0.01:
-        print("→ H2 지지: 교사 증류의 이득이 자기학습 대조군을 유의하게 상회 (교사 지식 전달로 귀인 가능)")
+        print("→ H2 supported: the distillation gain clearly exceeds the self-training control, so it can be attributed to knowledge transferred from the teacher")
     elif best_c > base:
-        print("→ H2 주의: 개선은 있으나 자기학습 대조군과 차이가 작음 — 귀인 재검토 필요")
+        print("→ H2 uncertain: there is an improvement, but it is close to the self-training control — the attribution needs re-examination")
     else:
-        print("→ H1 기각: 교사 증류가 기준선을 넘지 못함")
+        print("→ H1 rejected: teacher distillation does not beat the baseline")
 
 
 if __name__ == "__main__":
