@@ -66,7 +66,7 @@ class ChatViewModel @Inject constructor(
     private val syncTacticalPanelUseCase: SyncTacticalPanelUseCase,
     private val tacticalPanelRepository: TacticalPanelRepository,
     private val blockListSyncManager: com.zenbyte.domain.usecase.BlockListSyncManager, // ✅ Inject BlockListSyncManager
-    private val toxicityRepository: com.zenbyte.domain.repository.ToxicityRepository, // ✅ 온디바이스 독성 탐지
+    private val toxicityRepository: com.zenbyte.domain.repository.ToxicityRepository, // on-device toxicity detection
     private val json: Json,
     savedStateHandle: SavedStateHandle
 ) : BaseViewModel() { // Inherit from BaseViewModel
@@ -229,16 +229,19 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * 독성 경고 대기 중인 문장 (null이면 경고 없음).
-     * 경고는 안내일 뿐 차단이 아니다 — 사용자는 [sendPendingMessageAnyway]로 그대로 보낼 수 있다.
-     * 검사 문장은 이 StateFlow(RAM) 밖으로 나가지 않으며, 전송/취소 즉시 비운다.
+     * The sentence awaiting a toxicity warning (null means no warning).
+     * The warning is advice, not a block — the user can send it unchanged via
+     * [sendPendingMessageAnyway]. The inspected sentence never leaves this
+     * StateFlow (RAM), and is cleared the moment it is sent or dismissed.
      */
     private val _toxicWarningText = MutableStateFlow<String?>(null)
     val toxicWarningText: StateFlow<String?> = _toxicWarningText.asStateFlow()
 
     /**
-     * 전송 요청 진입점. 전송 직전 로컬(온디바이스) 추론으로 독성 여부를 검사하고,
-     * 판정 시 경고를 띄운 뒤 사용자의 결정을 기다린다. 추론 결과는 서버로 보내지 않는다.
+     * Entry point for a send request. Immediately before sending, local
+     * (on-device) inference checks for toxicity; on a positive verdict it raises
+     * a warning and waits for the user's decision. The inference result is never
+     * sent to the server.
      */
     fun sendMessage(text: String) {
         if (_isSending.value) return
@@ -252,14 +255,14 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** 경고를 무시하고 그대로 전송한다 (사용자 최종 결정권). */
+    /** Sends the message despite the warning (the user has the final say). */
     fun sendPendingMessageAnyway() {
         val text = _toxicWarningText.value ?: return
         _toxicWarningText.value = null
         viewModelScope.launch { dispatchMessage(text) }
     }
 
-    /** 경고 후 전송을 취소한다 (문장은 입력창에 남고, 대기 문장은 즉시 파기). */
+    /** Cancels sending after a warning (the text stays in the input box; the pending sentence is destroyed at once). */
     fun dismissToxicWarning() {
         _toxicWarningText.value = null
     }
@@ -273,7 +276,7 @@ class ChatViewModel @Inject constructor(
                 // Create the message object with appropriate metadata
                 val metadata = when (chatType) {
                     ChatType.GROUP -> mapOf("groupId" to chatId)
-                    ChatType.DIRECT -> mapOf("recipientId" to chatId) // 일대일: recipientId 포함
+                    ChatType.DIRECT -> mapOf("recipientId" to chatId) // direct chat: carries recipientId
                     ChatType.READ_RECEIPT -> null // Read receipts don't need specific metadata here
                 }
 
@@ -339,11 +342,13 @@ class ChatViewModel @Inject constructor(
                         val messageText = "📍 MGRS: $mgrsCoordinate\nGoogle Maps: $googleMapsLink"
 
                         // 2. Create Metadata
-                        // ⚠️ [무기록 원칙] 좌표는 절대 metadata에 넣지 않는다 — WebSocket 봉투에서
-                        // 암호화되는 것은 payload뿐이고 metadata는 평문으로 서버를 통과한다
-                        // (오프라인 수신자면 pendingBuffer에 최대 24시간 평문 체류). 좌표는 위의
-                        // messageText(암호화되는 본문)에만 실리고, 수신 측은 복호화된 본문에서 파싱한다.
-                        // 발신자는 온디바이스 위치 API만 사용하며 외부(지도 서버 등) 접속 흔적을 남기지 않는다.
+                        // ⚠️ [zero-persistence] Coordinates must never go into metadata. In the
+                        // WebSocket envelope only the payload is encrypted; metadata crosses the
+                        // server in the clear (and for an offline recipient it sits in pendingBuffer
+                        // in the clear for up to 24h). Coordinates ride only in messageText above
+                        // (the encrypted body), and the receiver parses them out after decryption.
+                        // The sender uses on-device location APIs only, leaving no trace of a call
+                        // to any external service such as a map server.
                         val metadata = when (chatType) {
                             ChatType.GROUP -> mapOf("groupId" to chatId)
                             ChatType.DIRECT -> mapOf("recipientId" to chatId)
@@ -353,7 +358,7 @@ class ChatViewModel @Inject constructor(
                         // 3. Create Message Object
                         val message = Message(
                             id = java.util.UUID.randomUUID(),
-                            content = messageText.toByteArray(Charsets.UTF_8), // 텍스트 메시지로 전송
+                            content = messageText.toByteArray(Charsets.UTF_8), // sent as a text message
                             senderId = myPublicKeyString,
                             type = "text", // New Type
                             metadata = metadata,
@@ -424,7 +429,7 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * 놓쳤을 수 있는 메시지를 상대방/그룹에게 다시 요청합니다.
+     * Asks the peer or group to resend messages that may have been missed.
      */
     fun requestResend() {
         viewModelScope.launch {
@@ -547,7 +552,7 @@ class ChatViewModel @Inject constructor(
                 if (group != null) {
                     val blockedInfo = BlockedGroupInfo(groupId = group.id, creatorId = group.creatorId)
                     blockedGroupRepository.add(blockedInfo)
-                    blockListSyncManager.sync() // ✅ 차단 목록 동기화 (서버 사이드 필터링 적용)
+                    blockListSyncManager.sync() // sync the block list (applies server-side filtering)
                 }
                 // Delete group locally after adding to block list
                 groupRepository.deleteGroup(chatId)
@@ -559,32 +564,32 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * 그룹을 해체합니다 (방장만 가능)
+     * Disbands the group (owner only).
      *
-     * 동작:
-     * 1. 모든 그룹 멤버에게 "group_disbanded" 메시지 전송
-     * 2. 로컬에서 그룹 키 삭제
-     * 3. 로컬에서 그룹 데이터 삭제
-     * 4. 채팅 화면 종료
+     * Steps:
+     * 1. send a "group_disbanded" message to every member
+     * 2. delete the group key locally
+     * 3. delete the group data locally
+     * 4. close the chat screen
      */
     fun disbandGroup(onGroupDisbanded: () -> Unit) {
         if (chatType != ChatType.GROUP) return
         viewModelScope.launch {
             try {
-                // 1. 그룹 정보 가져오기
+                // 1. fetch the group
                 val group = groupRepository.getGroup(chatId) ?: run {
                     sendError(ErrorEvent.Snackbar("그룹을 찾을 수 없습니다"))
                     return@launch
                 }
 
-                // 2. 방장의 프로필 정보 가져오기
+                // 2. fetch the owner's profile
                 val myProfile = userRepository.getMyProfile()
                 val senderAlias = myProfile.alias
 
-                // 3. "group_disbanded" 메시지 생성 및 전송
+                // 3. build and send the "group_disbanded" message
                 val content = chatId.toByteArray(Charsets.UTF_8)
 
-                // 모든 멤버에게 개별적으로 전송 (그룹 메시지와 동일한 metadata 형식)
+                // send to each member individually (same metadata shape as a group message)
                 group.members.forEach { memberId ->
                     val recipient = User(id = memberId, alias = "")
                     sendMessageUseCase(
@@ -599,18 +604,18 @@ class ChatViewModel @Inject constructor(
                     )
                 }
 
-                // 4. 로컬에서 그룹 키 삭제
+                // 4. delete the group key locally
                 cryptoRepository.deleteGroupKey(chatId)
 
-                // 5. 로컬에서 그룹 삭제
+                // 5. delete the group locally
                 groupRepository.deleteGroup(chatId)
 
-                // 6. 채팅 화면 종료
+                // 6. close the chat screen
                 onGroupDisbanded()
 
-                SafeLog.i("ChatViewModel", "그룹 해체 완료: $chatId")
+                SafeLog.i("ChatViewModel", "group disbanded: $chatId")
             } catch (e: Exception) {
-                SafeLog.e("ChatViewModel", "그룹 해체 실패: ${e.message}", e)
+                SafeLog.e("ChatViewModel", "group disband failed: ${e.message}", e)
                 sendError(ErrorEvent.Snackbar("그룹 해체에 실패했습니다: ${e.message}"))
             }
         }
@@ -630,29 +635,30 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * 메시지 각인 토글 (Zero-Persistence with deferred shredding)
-     * 각인된 메시지는 채팅방을 나가도 파쇄되지 않고, 앱 종료 시까지 유지됨
+     * Toggles pinning of a message (zero-persistence with deferred shredding).
+     * A pinned message survives leaving the chat room and is kept until the app
+     * exits.
      */
     fun toggleImprintMessage(messageId: java.util.UUID) {
         viewModelScope.launch {
             val app = application as? ZenbyteApplication ?: return@launch
 
-            // 현재 각인 상태 확인
+            // check the current pinned state
             val isCurrentlyImprinted = app.isMessageImprinted(chatId, messageId)
 
             if (isCurrentlyImprinted) {
-                // 각인 해제
+                // unpin
                 app.unimprintMessage(chatId, messageId)
             } else {
-                // 각인
+                // pin
                 app.imprintMessage(chatId, messageId)
             }
 
-            // UI 즉시 업데이트: 기존 리스트에서 해당 메시지만 업데이트 (중복 방지)
+            // update the UI at once, touching only this message in the list (avoids duplicates)
             _messages.update { currentMessages ->
                 currentMessages.map { message ->
                     if (message.id == messageId) {
-                        // 캐시에서 업데이트된 메시지 가져오기 (deepCopy된 객체)
+                        // take the updated message from the cache (a deep-copied object)
                         app.getMessagesFromCache(chatId).find { it.id == messageId } ?: message
                     } else {
                         message
@@ -662,7 +668,7 @@ class ChatViewModel @Inject constructor(
 
             SafeLog.d(
                 "ChatViewModel",
-                "📌 메시지 각인 토글: messageId=$messageId, isImprinted=${!isCurrentlyImprinted}"
+                "📌 pin toggled: messageId=$messageId, isImprinted=${!isCurrentlyImprinted}"
             )
         }
     }
@@ -672,8 +678,9 @@ class ChatViewModel @Inject constructor(
         // Clear current chat when leaving chat room
         (application as? ZenbyteApplication)?.setCurrentChat(null)
 
-        // 각인 기능: 각인되지 않은 메시지만 파쇄
-        // 각인된 메시지는 앱 종료 시까지 유지 (Zero-Persistence with deferred shredding)
+        // Pinning: shred only the messages that are not pinned.
+        // Pinned messages are kept until the app exits (zero-persistence with
+        // deferred shredding).
         (application as? ZenbyteApplication)?.clearNonImprintedMessagesFromCache(chatId)
     }
 }

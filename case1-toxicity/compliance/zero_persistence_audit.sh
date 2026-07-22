@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# exp-0004 무기록 준수 정적 감사.
+# exp-0004 static zero-persistence compliance audit.
 #
-# 독성 탐지 경로(TfidfSvmClassifier, DefaultToxicityRepository, ChatViewModel 경고 상태)가
-# 검사 문장이나 판정 결과를 (1) 네트워크로 내보내거나 (2) 디스크에 쓰거나 (3) 로그로 흘리지
-# 않는지 소스 수준에서 확인한다. 런타임 증명은 JUnit(디스크 바이트 비교·전송 페이로드 검사)이 담당.
+# Checks at source level that the toxicity path (TfidfSvmClassifier,
+# DefaultToxicityRepository, and ChatViewModel's warning state) never (1) sends
+# the inspected sentence or the verdict over the network, (2) writes them to
+# disk, or (3) leaks them into logs. The runtime half of the proof is the JUnit
+# suite (byte comparison of the data directories, inspection of the transmitted
+# payload).
 #
-# 사용: bash zero_persistence_audit.sh   (작업 디렉터리 무관)
+# Usage: bash zero_persistence_audit.sh   (from any working directory)
 set -uo pipefail
 
-# 아티팩트 판: 감사 대상은 `audited-sources/`에 담긴 앱 소스 스냅샷이다
-# (앱 트리 전체를 동봉하지 않으므로, 경로는 이 스크립트 위치를 기준으로 잡는다).
+# Artifact edition: the audit targets the snapshots of the app sources under
+# `audited-sources/`. The full app tree is not bundled here, so paths are
+# resolved relative to this script's own location.
 APP="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/audited-sources"
 FILES=(
-  "$APP/TfidfSvmClassifier.kt"          # exp-0011에서 FastTextClassifier를 대체
+  "$APP/TfidfSvmClassifier.kt"          # replaced FastTextClassifier in exp-0011
   "$APP/DefaultToxicityRepository.kt"
   "$APP/ToxicityRepository.kt"
 )
@@ -20,18 +24,20 @@ VM="$APP/ChatViewModel.kt"
 
 fail=0
 
-# ⚠️ 감사 대상 파일이 없으면 grep이 아무것도 찾지 못해 **공허하게 통과**한다.
-# (exp-0011의 모델 교체 때 실제로 발생했던 결함 — 존재 검사를 먼저 강제한다.)
-# ChatViewModel도 반드시 이 목록에 포함한다: 아래 수명 검사는 파일이 없으면
-# grep이 실패해 else 분기로 빠지면서 ✅를 출력하는 같은 결함을 갖는다.
+# ⚠️ If an audit target is missing, grep finds nothing and the audit **passes
+# vacuously**. (This actually happened when the model was swapped in exp-0011 —
+# hence the existence check enforced up front.)
+# ChatViewModel must be in this list too: the lifetime checks below have the
+# same defect, since a missing file makes grep fail, fall through to the else
+# branch, and print a pass.
 for f in "${FILES[@]}" "$VM"; do
   if [[ ! -f "$f" ]]; then
-    echo "❌ 감사 대상 파일 없음: $f"
-    echo "   (파일이 이동·삭제되었다면 이 스크립트의 FILES 목록을 갱신할 것)"
+    echo "❌ audit target missing: $f"
+    echo "   (if the file moved or was deleted, update this script's FILES list)"
     exit 1
   fi
 done
-check() { # check <설명> <정규식> <파일들...>
+check() { # check <description> <regex> <files...>
   local desc="$1" pattern="$2"; shift 2
   local hits
   hits=$(grep -nE "$pattern" "$@" 2>/dev/null || true)
@@ -44,37 +50,38 @@ check() { # check <설명> <정규식> <파일들...>
   fi
 }
 
-echo "=== exp-0004 무기록 정적 감사 ==="
-echo "대상: 독성 탐지 경로 3개 파일"
+echo "=== exp-0004 static zero-persistence audit ==="
+echo "targets: 3 files on the toxicity path"
 echo
 
-check "네트워크 전송 없음 (WebSocket/HTTP/Socket)" \
+check "no network transmission (WebSocket/HTTP/Socket)" \
   'NetworkDataSource|WebSocket|OkHttp|HttpURL|Socket\(|Retrofit|\.send\(' "${FILES[@]}"
 
-check "디스크 쓰기 없음 (File/SharedPrefs/DB/Output)" \
+check "no disk write (File/SharedPrefs/DB/Output)" \
   'SharedPreferences|FileOutputStream|FileWriter|openFileOutput|\.write\(|Room|SQLite|DataStore|getExternalStorage|SecureStorage' "${FILES[@]}"
 
-check "검사 문장·확률의 로그 유출 없음" \
+check "no inspected sentence or probability leaking into logs" \
   'Log\.(d|i|v|e|w)\(.*(text|prob|score|message|content)' "${FILES[@]}"
 
-# ChatViewModel: 경고 상태가 캐시/전송 경로로 새지 않는지 (대기 문장은 전송 또는 취소 시 즉시 null)
+# ChatViewModel: does the warning state leak into the cache or the send path?
+# (the pending sentence must go null the moment it is sent or dismissed)
 echo
-echo "--- ChatViewModel 경고 상태 수명 ---"
+echo "--- ChatViewModel warning-state lifetime ---"
 if grep -q '_toxicWarningText.value = null' "$VM"; then
-  echo "✅ 대기 문장이 전송/취소 시 즉시 파기됨 (null 대입 존재)"
+  echo "✅ the pending sentence is destroyed on send/dismiss (null assignment present)"
 else
-  echo "❌ 대기 문장 파기 코드 없음"; fail=1
+  echo "❌ no code destroying the pending sentence"; fail=1
 fi
 if grep -nE 'addMessageToCache.*toxic|toxic.*(sendMessageUseCase|NetworkDataSource)' "$VM" >/dev/null; then
-  echo "❌ 판정 결과가 캐시/전송 경로로 유입됨"; fail=1
+  echo "❌ the verdict flows into the cache or the send path"; fail=1
 else
-  echo "✅ 판정 결과가 메시지 캐시·전송 페이로드에 포함되지 않음"
+  echo "✅ the verdict reaches neither the message cache nor the transmitted payload"
 fi
 
 echo
 if [[ $fail -eq 0 ]]; then
-  echo "=== 결과: 통과 — 독성 탐지 경로는 RAM 안에서 완결됨 ==="
+  echo "=== result: PASS — the toxicity path is self-contained in RAM ==="
 else
-  echo "=== 결과: 실패 — 위 항목 확인 필요 ==="
+  echo "=== result: FAIL — check the items above ==="
 fi
 exit $fail

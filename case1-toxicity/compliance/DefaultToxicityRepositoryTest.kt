@@ -14,11 +14,15 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * exp-0004 런타임 무기록 증명 (디스크 레벨).
+ * exp-0004 runtime zero-persistence proof (disk level).
  *
- * 추론을 반복 실행한 전후로 앱 데이터 디렉토리(filesDir, cacheDir, shared_prefs)의
- * 파일 목록·크기·내용이 **바이트 단위로 불변**임을 확인한다. 즉 검사 문장도, 판정 결과도,
- * 어떤 캐시도 디스크에 떨어지지 않는다.
+ * Confirms that the file listing, sizes and contents of the app's data
+ * directories (filesDir, cacheDir, shared_prefs) are **byte-for-byte unchanged**
+ * before and after inference is run repeatedly. That is: neither the inspected
+ * sentence, nor the verdict, nor any cache reaches the disk.
+ *
+ * The Korean sentences below are test inputs, not prose — the classifier is a
+ * Korean-language model, so they are kept as-is.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = android.app.Application::class)
@@ -33,7 +37,7 @@ class DefaultToxicityRepositoryTest {
         repository = DefaultToxicityRepository(context)
     }
 
-    /** 데이터 디렉토리 스냅샷: 상대경로 → (크기, 내용 해시) */
+    /** Snapshot of the data directories: relative path → (size, content hash) */
     private fun snapshot(): Map<String, Pair<Long, Int>> {
         val roots = listOfNotNull(context.filesDir, context.cacheDir, context.dataDir)
         return roots.flatMap { root ->
@@ -44,7 +48,7 @@ class DefaultToxicityRepositoryTest {
     }
 
     @Test
-    fun `추론 전후 앱 데이터 디렉토리가 바이트 단위로 불변이다`() = runBlocking {
+    fun `app data directories are byte-identical before and after inference`() = runBlocking {
         val before = snapshot()
 
         repeat(3) {
@@ -58,20 +62,21 @@ class DefaultToxicityRepositoryTest {
         val removed = before.keys - after.keys
         val changed = before.keys.intersect(after.keys).filter { before[it] != after[it] }
 
-        assertTrue("추론이 파일을 생성함: $added", added.isEmpty())
-        assertTrue("추론이 파일을 삭제함: $removed", removed.isEmpty())
-        assertTrue("추론이 파일을 변경함: $changed", changed.isEmpty())
+        assertTrue("inference created files: $added", added.isEmpty())
+        assertTrue("inference deleted files: $removed", removed.isEmpty())
+        assertTrue("inference modified files: $changed", changed.isEmpty())
     }
 
     @Test
-    fun `모델이 실제로 독성 문장과 정상 문장을 구분한다`() = runBlocking {
-        // 동작점 임계값(0.375) 기준. 회귀 시 즉시 감지되도록 대표 문장만 확인한다.
-        assertTrue("독성 문장을 놓침", repository.isToxic("ㅅㅂ 개같은 상황이네"))
-        assertFalse("정상 문장을 오탐", repository.isToxic("좋은 아침입니다. 오늘 회의는 10시입니다"))
+    fun `the model actually separates toxic from ordinary sentences`() = runBlocking {
+        // Judged at the deployed threshold (0.475). Only representative sentences
+        // are checked, so that a regression shows up immediately.
+        assertTrue("missed a toxic sentence", repository.isToxic("ㅅㅂ 개같은 상황이네"))
+        assertFalse("flagged an ordinary sentence", repository.isToxic("좋은 아침입니다. 오늘 회의는 10시입니다"))
     }
 
     @Test
-    fun `빈 문장은 검사하지 않는다`() = runBlocking {
+    fun `blank sentences are not inspected`() = runBlocking {
         assertFalse(repository.isToxic(""))
         assertFalse(repository.isToxic("   "))
     }

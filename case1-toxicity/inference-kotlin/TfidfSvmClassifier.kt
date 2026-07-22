@@ -8,17 +8,21 @@ import kotlin.math.ln
 import kotlin.math.sqrt
 
 /**
- * TF-IDF(char_wb) + 선형 SVM 추론의 순수 Kotlin 구현 (exp-0011).
+ * Pure-Kotlin implementation of TF-IDF (char_wb) + linear SVM inference
+ * (exp-0011).
  *
- * exp-0010의 제약 하 벤치마크에서 fastText를 성능(F1 0.805 vs 0.788)과
- * 크기(3.08MB vs 14.04MB) 양쪽에서 능가하여 배포 모델로 채택되었다.
+ * In the constrained benchmark of exp-0010 this model beat fastText on both
+ * accuracy (F1 0.805 vs 0.788) and size (3.08MB vs 14.04MB), and was adopted as
+ * the deployed model.
  *
- * scikit-learn 파이프라인을 그대로 재현한다:
- *   소문자화 → 연속 공백 정규화 → 단어 경계 char n-gram → 어휘 조회
- *   → sublinear tf (1+ln c) × idf → L2 정규화 → 선형 결정함수 → sigmoid
+ * It reproduces the scikit-learn pipeline exactly:
+ *   lowercase → collapse runs of whitespace → word-boundary char n-grams →
+ *   vocabulary lookup → sublinear tf (1+ln c) × idf → L2 normalization →
+ *   linear decision function → sigmoid
  *
- * 네이티브 라이브러리 없음. 입력 문장과 추론 결과는 어디에도 저장하지 않는다 (Zero-Persistence).
- * 동치성은 TfidfSvmClassifierTest(테스트 벡터 1,000문장, 오차 < 1e-4)로 자동 검증된다.
+ * No native library. Neither the input sentence nor the inference result is
+ * stored anywhere (zero-persistence). Equivalence is checked against the test
+ * vectors bundled under equivalence/ (1,000 sentences, max Δp < 1e-4).
  */
 class TfidfSvmClassifier private constructor(
     private val minN: Int,
@@ -41,7 +45,7 @@ class TfidfSvmClassifier private constructor(
             val maxN = buf.int
             val nTerms = buf.int
             val sublinear = buf.get().toInt() != 0
-            buf.get()                       // useIdf (항상 1)
+            buf.get()                       // useIdf (always 1)
             buf.short                       // padding
             val threshold = buf.float
             val intercept = buf.float
@@ -64,14 +68,15 @@ class TfidfSvmClassifier private constructor(
                 coefScale, idf, coefQ, vocab)
         }
 
-        /** sklearn `_white_spaces = re.compile(r"\s\s+")` — **2개 이상** 연속 공백만 단일 공백으로. */
+        /** sklearn `_white_spaces = re.compile(r"\s\s+")` — collapses runs of **two or more** spaces into one. */
         private val MULTI_SPACE = Regex("\\s\\s+")
     }
 
     /**
-     * sklearn `_char_wb_ngrams` 재현.
-     * 단어를 공백으로 패딩한 뒤 슬라이딩 윈도우로 n-gram을 뽑되,
-     * 패딩된 단어가 n보다 짧으면 전체를 1회만 세고 n 루프를 끝낸다.
+     * Reproduces sklearn's `_char_wb_ngrams`.
+     * Pads each word with spaces and slides a window over it, except that when
+     * the padded word is shorter than n, the whole word is counted once and the
+     * n loop ends.
      */
     private fun forEachNgram(text: String, action: (String) -> Unit) {
         val normalized = MULTI_SPACE.replace(text.lowercase(), " ")
@@ -86,12 +91,12 @@ class TfidfSvmClassifier private constructor(
                     offset++
                     action(w.substring(offset, offset + n))
                 }
-                if (offset == 0) break // 짧은 단어는 1회만 세고 종료
+                if (offset == 0) break // a short word is counted once, then we stop
             }
         }
     }
 
-    /** 선형 결정함수 값 (부호가 판정, 크기가 확신도). */
+    /** The linear decision value (its sign is the verdict, its magnitude the confidence). */
     private fun decision(text: String): Float {
         val counts = HashMap<Int, Int>()
         forEachNgram(text) { ng ->
@@ -100,7 +105,7 @@ class TfidfSvmClassifier private constructor(
         }
         if (counts.isEmpty()) return intercept
 
-        // tf-idf 값 계산 → L2 정규화 → 계수와 내적
+        // compute tf-idf values → L2 normalize → dot with the coefficients
         var normSq = 0.0
         val values = DoubleArray(counts.size)
         val indices = IntArray(counts.size)
@@ -123,9 +128,9 @@ class TfidfSvmClassifier private constructor(
         return (acc + intercept).toFloat()
     }
 
-    /** P(독성) ∈ [0,1]. 입력·결과 모두 호출자 스택 밖에 잔류하지 않는다. */
+    /** P(toxic) ∈ [0,1]. Neither the input nor the result outlives the caller's stack. */
     fun probToxic(text: String): Float = (1.0 / (1.0 + exp(-decision(text).toDouble()))).toFloat()
 
-    /** 전송 전 경고 판정 (임계값은 모델 파일에 내장, val 셋에서 선택됨). */
+    /** The pre-send warning verdict (the threshold is embedded in the model file, selected on the val set). */
     fun isToxic(text: String): Boolean = probToxic(text) >= threshold
 }

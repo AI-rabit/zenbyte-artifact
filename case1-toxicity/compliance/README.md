@@ -9,13 +9,18 @@ by review. The three layers, all included here verbatim:
 | **Network** | `ChatViewModelToxicityTest.kt` | Nothing is transmitted before the user confirms the warning; after confirming, only the original message bytes leave — the wire format has no field where a verdict or score could ride. |
 | **Disk** | `DefaultToxicityRepositoryTest.kt` | The app's entire data directories are byte-compared before and after repeated inference: zero files added, removed, or changed. |
 
-`audited-sources/` contains the exact files the static audit targets, copied
-verbatim from the app: `TfidfSvmClassifier.kt` (inference),
-`DefaultToxicityRepository.kt` (lazy asset load, fail-open),
-`ToxicityRepository.kt` (domain interface), and `ChatViewModel.kt` (the
-warning-state lifetime checked in the second half of the script — included
-whole rather than excerpted, so the audit cannot be accused of grepping a
-favourable extract).
+`audited-sources/` contains the files the static audit targets:
+`TfidfSvmClassifier.kt` (inference), `DefaultToxicityRepository.kt` (lazy asset
+load, fail-open), `ToxicityRepository.kt` (domain interface), and
+`ChatViewModel.kt` (the warning-state lifetime checked in the second half of the
+script — included whole rather than excerpted, so the audit cannot be accused of
+grepping a favourable extract).
+
+These are the app's own sources with two edits for this artifact: comments and
+developer log strings were translated from Korean to English, and nothing else.
+Every statement, branch and call is unchanged. The user-facing strings are left
+in Korean because that is what the app actually ships; translating them would
+misrepresent the product under audit.
 
 ## Running
 

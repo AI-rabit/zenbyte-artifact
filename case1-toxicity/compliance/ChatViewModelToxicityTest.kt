@@ -32,13 +32,19 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * exp-0004 런타임 무기록 증명 (전송 경로 레벨).
+ * exp-0004 runtime zero-persistence proof (send-path level).
  *
- * 증명하려는 것:
- *  1) 독성 판정 시 사용자 확인 전까지 **네트워크 전송이 일어나지 않는다** (SendMessageUseCase 미호출)
- *  2) 사용자가 "그대로 보내기"를 택하면 **원문 그대로** 전송된다 — 판정 결과·확률이
- *     페이로드나 메타데이터에 실려 나가지 않는다
- *  3) 취소 시 대기 문장이 즉시 파기된다 (RAM에도 잔류 없음)
+ * What it proves:
+ *  1) when a sentence is judged toxic, **nothing goes to the network** before the
+ *     user confirms (SendMessageUseCase is never invoked)
+ *  2) if the user chooses "send anyway", the **original text alone** is sent —
+ *     no verdict and no probability rides along in the payload or the metadata
+ *  3) on dismiss, the pending sentence is destroyed at once (nothing left in RAM)
+ *
+ * The Korean strings are test payloads and are kept as-is: they exercise
+ * multibyte UTF-8 round-tripping through the send path, which an ASCII
+ * placeholder would not. ("욕설이 담긴 문장" = "a sentence containing profanity",
+ * "좋은 아침입니다" = "good morning", "친구" = "friend".)
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -96,7 +102,7 @@ class ChatViewModelToxicityTest {
     }
 
     @Test
-    fun `독성 판정 시 확인 전에는 네트워크로 나가지 않는다`() = runTest(dispatcher) {
+    fun `nothing reaches the network before the user confirms a toxic verdict`() = runTest(dispatcher) {
         toxicityRepository.stub { onBlocking { isToxic(any()) } doReturn true }
         val vm = viewModel()
 
@@ -108,7 +114,7 @@ class ChatViewModelToxicityTest {
     }
 
     @Test
-    fun `그대로 보내기 선택 시 원문만 전송된다 - 판정 결과는 실리지 않는다`() = runTest(dispatcher) {
+    fun `send anyway transmits the original text only - the verdict does not ride along`() = runTest(dispatcher) {
         toxicityRepository.stub { onBlocking { isToxic(any()) } doReturn true }
         val vm = viewModel()
 
@@ -117,18 +123,19 @@ class ChatViewModelToxicityTest {
         vm.sendPendingMessageAnyway()
         advanceUntilIdle()
 
-        // 원문 바이트만, 타입 "text", 메타데이터 null — 독성 점수/판정이 새어나갈 자리가 없다
+        // original bytes only, type "text", metadata null — there is no field a
+        // toxicity score or verdict could occupy
         verify(sendMessageUseCase).invoke(
             eq("욕설이 담긴 문장".toByteArray(Charsets.UTF_8)),
             eq(partner),
             eq("text"),
             eq(null),
         )
-        assertNull(vm.toxicWarningText.value) // 대기 문장 즉시 파기
+        assertNull(vm.toxicWarningText.value) // pending sentence destroyed at once
     }
 
     @Test
-    fun `취소 시 전송되지 않고 대기 문장이 파기된다`() = runTest(dispatcher) {
+    fun `dismissing sends nothing and destroys the pending sentence`() = runTest(dispatcher) {
         toxicityRepository.stub { onBlocking { isToxic(any()) } doReturn true }
         val vm = viewModel()
 
@@ -142,7 +149,7 @@ class ChatViewModelToxicityTest {
     }
 
     @Test
-    fun `정상 문장은 경고 없이 곧바로 전송된다`() = runTest(dispatcher) {
+    fun `an ordinary sentence is sent straight through without a warning`() = runTest(dispatcher) {
         toxicityRepository.stub { onBlocking { isToxic(any()) } doReturn false }
         val vm = viewModel()
 

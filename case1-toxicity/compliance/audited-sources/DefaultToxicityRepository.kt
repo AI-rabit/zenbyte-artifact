@@ -11,13 +11,17 @@ import javax.inject.Singleton
 import com.zenbyte.core.SafeLog
 
 /**
- * assets의 ZBSV 모델(TF-IDF char n-gram + 선형 SVM)을 지연 로드해 온디바이스 추론을 수행한다.
+ * Runs on-device inference by lazily loading the ZBSV model (TF-IDF char
+ * n-grams + linear SVM) from assets.
  *
- * exp-0011: 제약 하 벤치마크(exp-0010) 결과 fastText를 성능(F1 0.805 vs 0.788)과
- * 크기(3.08MB vs 14.04MB) 양쪽에서 능가하여 배포 모델로 교체되었다.
+ * exp-0011: in the constrained benchmark (exp-0010) this model beat fastText on
+ * both accuracy (F1 0.805 vs 0.788) and size (3.08MB vs 14.04MB), and so
+ * replaced it as the deployed model.
  *
- * 모델은 첫 검사 시 1회 로드되어 프로세스 수명 동안 RAM에 상주한다 (약 4MB).
- * 검사 문장·결과는 저장하지 않으며, 로드 실패 시 조용히 비활성화되어 전송을 방해하지 않는다.
+ * The model is loaded once on the first check and stays resident in RAM for the
+ * lifetime of the process (about 4MB). Neither the inspected sentence nor the
+ * verdict is stored, and if loading fails the feature disables itself quietly
+ * rather than interfering with sending.
  */
 @Singleton
 class DefaultToxicityRepository @Inject constructor(
@@ -40,7 +44,7 @@ class DefaultToxicityRepository @Inject constructor(
                 }.onSuccess { classifier = it }
                     .onFailure {
                         loadFailed = true
-                        SafeLog.w(TAG, "독성 탐지 모델 로드 실패 — 기능 비활성화")
+                        SafeLog.w(TAG, "toxicity model failed to load — feature disabled")
                     }
                     .getOrNull()
             }
