@@ -1,18 +1,24 @@
-"""exp-0008 H2 검증: 라벨 정합성을 고려한 선별 증강이 F1을 개선하는가.
+"""exp-0008 test of H2: does selective augmentation that respects label
+agreement improve F1?
 
-전이 행렬에서 드러난 사실: 외부 데이터셋의 라벨은 우리보다 **넓다**
-(우리 = 욕설/모욕 중심, 그들 = 비속어 없는 차별·편향 발언까지 포함).
-따라서 단순 증강은 정밀도를 무너뜨린다.
+What the transfer matrix revealed: the labels of the external datasets are
+**broader** than ours (ours centre on profanity and insult; theirs extend to
+discriminatory or biased statements that contain no profanity at all).
+Indiscriminate augmentation therefore destroys precision.
 
-이 스크립트는 4개 팔(arm)을 비교한다:
-  A. 기존 (ours only)                          — 기준선
-  B. 전량 증강 (ours + APEACH + kor-hate)      — 순진한 증강 (실패 예상, 대조군)
-  C. 라벨 정렬 증강: 외부 양성 중 **욕설 어휘를 포함한 것만** 추가
-     (우리 라벨 정의에 맞는 부분만 뽑아 쓰는 원칙적 필터)
-  D. 음성만 증강: 외부 음성(clean)만 추가 — 라벨 정의 차이는 양성 쪽에 있으므로
-     음성은 안전하게 재사용 가능하다는 가설
+This script compares several arms:
+  A. baseline (ours only)                       — the reference
+  B. augment with everything (ours + APEACH + kor-hate) — the naive version,
+     expected to fail; it is the control
+  C. label-aligned augmentation: of the external positives, add **only those
+     containing profanity vocabulary** — a principled filter that takes just the
+     portion matching our own label definition
+  D. negatives only: add the external clean rows only, on the hypothesis that
+     the label-definition mismatch lies on the positive side, so negatives can
+     be reused safely
 
-각 팔 3회 반복, val에서 임계값 최적화 F1 (test는 최종 1회만 개봉).
+Each arm is repeated 3 times and scored by threshold-optimized F1 on val (test
+is opened only once, at the end).
 """
 import statistics
 import sys
@@ -25,7 +31,7 @@ EXP2 = Path(__file__).parent.parent.parent / "exp-0002-fasttext-tradeoff"
 sys.path.insert(0, str(EXP2 / "code"))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from baseline_keyword import LEXICON  # noqa: E402  (욕설 사전 — 라벨 정렬 필터에 사용)
+from baseline_keyword import LEXICON  # noqa: E402  (the profanity lexicon, used by the label-alignment filter)
 from common import f1_binary, train_with_retry  # noqa: E402
 from datasets_survey import DATA, load_all, load_ours  # noqa: E402
 from transfer_matrix import OP, best_f1, prob_pos, write_ft  # noqa: E402
@@ -45,7 +51,7 @@ def run_arm(name: str, train_df: pd.DataFrame, val: pd.DataFrame) -> tuple[float
                                     loss="softmax", thread=1, verbose=0, **OP)
         f1s.append(best_f1(val["label"].tolist(), prob_pos(model, val["text"])))
     mean, std = statistics.mean(f1s), statistics.stdev(f1s)
-    print(f"{name:32s} n={len(train_df):6d} 양성={train_df['label'].mean():.3f} "
+    print(f"{name:32s} n={len(train_df):6d} positive={train_df['label'].mean():.3f} "
           f"→ val F1 = {mean:.4f} ± {std:.4f}")
     return mean, std
 
@@ -58,28 +64,28 @@ def main():
     external = external.drop_duplicates(subset="text")
     external = external[~external["text"].isin(set(ours["text"]))]
 
-    print("\n=== H2 검증: 선별 증강 4개 팔 (val, 3회 반복 평균) ===\n")
+    print("\n=== H2: selective augmentation arms (val, averaged over 3 runs) ===\n")
 
-    # A. 기준선
-    run_arm("A. 기존 (ours only)", ours, val)
+    # A. baseline
+    run_arm("A. baseline (ours only)", ours, val)
 
-    # B. 순진한 전량 증강
-    run_arm("B. 전량 증강 (+APEACH+korhate)",
+    # B. naive augmentation with everything
+    run_arm("B. augment with all (+APEACH+korhate)",
             pd.concat([ours, external], ignore_index=True), val)
 
-    # C. 라벨 정렬 증강: 외부 양성 중 욕설 어휘 포함분만 + 외부 음성 전량
+    # C. label-aligned: external positives containing profanity, plus all external negatives
     ext_pos_aligned = external[(external["label"] == 1) & external["text"].map(has_profanity)]
     ext_neg = external[external["label"] == 0]
-    print(f"   (라벨 정렬 필터: 외부 양성 {(external['label']==1).sum()}건 중 "
-          f"욕설 포함 {len(ext_pos_aligned)}건만 채택)")
-    run_arm("C. 라벨정렬 증강 (양성 필터+음성)",
+    print(f"   (label-alignment filter: of {(external['label']==1).sum()} external positives, "
+          f"only the {len(ext_pos_aligned)} containing profanity are kept)")
+    run_arm("C. label-aligned (filtered positives + negatives)",
             pd.concat([ours, ext_pos_aligned, ext_neg], ignore_index=True), val)
 
-    # D. 음성만 증강
-    run_arm("D. 음성만 증강", pd.concat([ours, ext_neg], ignore_index=True), val)
+    # D. negatives only
+    run_arm("D. negatives only", pd.concat([ours, ext_neg], ignore_index=True), val)
 
-    # E. 라벨정렬 양성만 (음성 없이)
-    run_arm("E. 정렬양성만 증강", pd.concat([ours, ext_pos_aligned], ignore_index=True), val)
+    # E. aligned positives only (no negatives)
+    run_arm("E. aligned positives only", pd.concat([ours, ext_pos_aligned], ignore_index=True), val)
 
 
 if __name__ == "__main__":

@@ -1,14 +1,15 @@
-"""exp-0003 가중치 추출: operating_point.bin → ZBFT 바이너리 포맷 (Kotlin 반입용).
+"""exp-0003 weight extraction: operating_point.bin → the ZBFT binary format,
+for porting into Kotlin.
 
-포맷 v1 (little-endian):
+Format v1 (little-endian):
   magic   4B  'ZBFT'
   version u32 = 1
   dim, nwords, bucket, minn, maxn, wordNgrams : u32 ×6
-  threshold f32  (val에서 선택된 판정 임계값)
+  threshold f32  (the decision threshold chosen on val)
   output  f32 × (2·dim)          # row0=__label__0, row1=__label__1
-  scales  f32 × (nwords+bucket)  # 행별 int8 역양자화 스케일
+  scales  f32 × (nwords+bucket)  # per-row int8 dequantization scale
   matrix  i8  × ((nwords+bucket)·dim)
-  vocab   nwords × { u16 len + utf8 bytes }  # id 순서
+  vocab   nwords × { u16 len + utf8 bytes }  # in id order
 """
 import json
 import struct
@@ -36,7 +37,7 @@ def main():
     out = m.get_output_matrix().astype(np.float32)  # (2, dim)
     assert m.get_labels() == ["__label__0", "__label__1"]
 
-    # 행별 int8 양자화
+    # per-row int8 quantization
     scales = np.abs(inp).max(axis=1) / 127.0
     scales[scales == 0] = 1.0
     q = np.clip(np.round(inp / scales[:, None]), -127, 127).astype(np.int8)

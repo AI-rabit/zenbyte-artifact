@@ -1,14 +1,19 @@
-"""exp-0008 결정적 진단: 학습 곡선.
+"""exp-0008 decisive diagnostic: the learning curve.
 
-질문: "우리 라벨 정의와 완벽히 일치하는 데이터를 더 구하면 F1이 오르는가?"
+Question: "would F1 rise if we obtained more data that matches our own label
+definition exactly?"
 
-전이 행렬은 "남의 데이터는 못 쓴다"를 보였다. 그렇다면 같은 정의의 데이터를 더 모으면?
-train의 25/50/75/100%로 학습해 곡선을 그린다.
-  - 곡선이 끝에서 우상향 → 데이터 확보가 답. 같은 기준으로 라벨링 투자할 가치 있음.
-  - 곡선이 평탄 → 데이터는 포화. 병목은 **모델 용량**이며, 남은 레버는 증류/아키텍처뿐.
+The transfer matrix showed that other people's data cannot be used. So what
+about more data under the same definition? The curve is drawn by training on
+25/50/75/100% of train.
+  - still rising at the right-hand end → acquiring data is the answer, and
+    labelling more under the same criteria is worth the investment.
+  - flat → the data axis is saturated. The bottleneck is **model capacity**, and
+    the remaining levers are distillation or a change of architecture.
 
-비교선: 같은 부분집합으로 KcELECTRA를 학습하면? (용량이 큰 모델은 데이터를 더 잘 쓰는가)
-→ GPU 비용 때문에 fastText 곡선만 먼저 그리고, 필요 시 확장.
+A comparison worth running: train KcELECTRA on the same subsets — does a
+higher-capacity model use the data better? Because of GPU cost, the fastText
+curve is drawn first and this is extended only if needed.
 """
 import statistics
 import sys
@@ -33,8 +38,8 @@ def main():
     train = load_ours("train")
     val = load_ours("val")
 
-    print("=== 학습 곡선 (ours, fastText 동작점, val F1 3회 평균) ===\n")
-    print("비율   학습건수   양성건수 |   val F1")
+    print("=== learning curve (ours, fastText operating point, val F1 averaged over 3 runs) ===\n")
+    print("frac    n_train  n_positive |   val F1")
     results = []
     for frac in (0.25, 0.50, 0.75, 1.00):
         if frac < 1.0:
@@ -52,14 +57,14 @@ def main():
         results.append((frac, len(sub), int(sub["label"].sum()), m, s))
         print(f"{frac:4.0%} {len(sub):9d} {int(sub['label'].sum()):10d} | {m:.4f} ± {s:.4f}")
 
-    print("\n--- 해석 ---")
+    print("\n--- interpretation ---")
     d_last = results[-1][3] - results[-2][3]
-    print(f"75% → 100% 구간 기울기: {d_last:+.4f} F1 / +{results[-1][1]-results[-2][1]}건")
+    print(f"slope over the 75% → 100% segment: {d_last:+.4f} F1 per +{results[-1][1]-results[-2][1]} rows")
     if abs(d_last) < 0.01:
-        print("→ 곡선 평탄. 데이터를 2배로 늘려도 +0.01 미만 예상 — **데이터 축 포화**.")
-        print("   병목은 모델 용량(fastText)이며, 남은 레버는 지식 증류 또는 아키텍처 변경.")
+        print("→ the curve is flat. Doubling the data should gain under +0.01 — **the data axis is saturated**.")
+        print("   the bottleneck is model capacity (fastText); the remaining levers are knowledge distillation or a change of architecture.")
     else:
-        print("→ 곡선이 아직 상승 중. 같은 라벨 정의로 데이터를 더 확보할 가치가 있음.")
+        print("→ the curve is still rising. Acquiring more data under the same label definition is worthwhile.")
 
 
 if __name__ == "__main__":

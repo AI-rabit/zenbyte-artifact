@@ -1,10 +1,13 @@
-"""exp-0008 교차 데이터셋 전이 행렬.
+"""exp-0008 cross-dataset transfer matrix.
 
-각 데이터셋으로 fastText(동작점 설정)를 학습하고, 모든 데이터셋의 held-out에서 F1을 측정한다.
-대각선 = in-domain 성능(그 데이터셋 자체의 난이도), 비대각선 = 라벨 정의·도메인 정합성.
+fastText (at the operating-point configuration) is trained on each dataset and
+scored by F1 on the held-out portion of every dataset. The diagonal is
+in-domain performance (how hard that dataset is in itself); the off-diagonal
+measures how well label definitions and domains agree.
 
-핵심 질문: "train on X → eval on ours"가 낮으면, X를 증강해도 우리 성능은 오르지 않는다.
-이것이 exp-0002의 unsmile 증강 실패에 대한 정량적 설명이 된다.
+The question that matters: if "train on X → eval on ours" is low, then
+augmenting with X cannot raise our performance. That is the quantitative
+explanation for why the unsmile augmentation failed in exp-0002.
 """
 import sys
 from pathlib import Path
@@ -40,19 +43,20 @@ def prob_pos(model, texts):
 
 
 def best_f1(y, p) -> float:
-    """임계값을 최적화한 F1 (데이터셋 간 양성 비율 차이를 보정)."""
+    """F1 with the threshold optimized, which corrects for differing positive rates across datasets."""
     return max(f1_binary(y, (p >= th).astype(int).tolist())["f1"]
                for th in np.arange(0.05, 0.95, 0.025))
 
 
 def main():
     DATA.mkdir(exist_ok=True)
-    print("데이터 로드…")
+    print("loading data…")
     data = load_all()
-    # 우리 val을 별도 평가 축으로 추가 (증강 의사결정의 실제 기준)
+    # add our own val as a separate evaluation axis — it is the criterion the
+    # augmentation decision actually rests on
     ours_val = load_ours("val")
 
-    # 각 데이터셋을 train/holdout으로 분할
+    # split each dataset into train and holdout
     splits = {}
     for name, df in data.items():
         tr, ho = train_test_split(df, test_size=0.2, stratify=df["label"], random_state=SEED)
@@ -72,20 +76,20 @@ def main():
         row["→ ours(val)"] = round(best_f1(ours_val["label"].tolist(),
                                            prob_pos(model, ours_val["text"])), 3)
         rows.append(row)
-        print(f"  {train_name} 학습 완료")
+        print(f"  {train_name} trained")
 
     df = pd.DataFrame(rows)
-    print("\n=== 교차 전이 행렬 (fastText 동작점, 임계값 최적화 F1) ===")
-    print("행=학습 데이터, 열=평가 데이터\n")
+    print("\n=== cross-transfer matrix (fastText operating point, threshold-optimized F1) ===")
+    print("rows = training data, columns = evaluation data\n")
     print(df.to_string(index=False))
     df.to_csv(Path(__file__).parent.parent / "artifacts" / "transfer_matrix.csv", index=False)
 
-    print("\n--- 해석 ---")
+    print("\n--- interpretation ---")
     for r in rows:
         indomain = r[r["train"]]
         to_ours = r["→ ours(val)"]
         print(f"{r['train']:24s}: in-domain {indomain:.3f} → ours {to_ours:.3f} "
-              f"(격차 {to_ours - indomain:+.3f})")
+              f"(gap {to_ours - indomain:+.3f})")
 
 
 if __name__ == "__main__":

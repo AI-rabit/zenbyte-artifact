@@ -1,7 +1,11 @@
-"""exp-0008 데이터셋 로더 + 조사표.
+"""exp-0008 dataset loaders and survey table.
 
-각 데이터셋을 (text, label) 이진 형태로 정규화한다. label 1 = 부적절(욕설/혐오/악플).
-라이선스 불명 데이터셋은 로드하지 않는다.
+Every dataset is normalized to a binary (text, label) form, where label 1 =
+inappropriate (profanity / hate / abuse). Datasets whose license is unclear are
+not loaded.
+
+Note: the Korean strings in the loaders below ("문장") are column names in the
+source datasets and must stay as they are.
 """
 import re
 import sys
@@ -19,28 +23,28 @@ def normalize(t: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFC", str(t))).strip()
 
 
-# ── 조사표 (라이선스는 2026-07-13 확인 기준) ──────────────────────────────
+# ── survey table (license status as checked on 2026-07-13) ────────────────
 SURVEY = [
-    # name, 규모, 라이선스, 라벨 정의, 도메인, 채택
-    ("curse (2runo)", 5825, "MIT", "욕설 포함 여부", "온라인 댓글", "✅ 기존 사용"),
-    ("hatescore", 11108, "Apache-2.0", "혐오발언/단순악플 vs Clean", "댓글+위키+규칙생성", "✅ 기존 사용"),
-    ("unsmile", 18742, "CC-BY-NC-ND", "혐오 카테고리 9종 + 악플/욕설", "온라인 댓글", "⚠️ exp-0002서 역효과"),
-    ("APEACH", 11666, "CC-BY-SA-4.0", "혐오표현 여부 (crowd-generated)", "크라우드 생성", "🔬 이번 평가"),
-    ("kor-hate-sentence", 36661, "CC-BY-SA-4.0", "hate vs clean", "댓글 (unsmile/kmhas 계열 추정)", "🔬 이번 평가"),
-    ("2tle/korean-curse", 1000, "MIT", "욕설 span 주석", "2runo와 동일 문장", "❌ 중복 (신규 데이터 아님)"),
-    ("josephnam/korean_toxic", 8448, "불명", "LLM 유해 질의 (안전성)", "합성 프롬프트", "❌ 과제 불일치 + 라이선스 불명"),
-    ("jigsaw (영어)", 160000, "CC0", "toxic 6종 멀티라벨", "위키 토론 (영어)", "🔬 참고 (언어 불일치)"),
+    # name, size, license, label definition, domain, verdict
+    ("curse (2runo)", 5825, "MIT", "contains profanity", "online comments", "✅ already in use"),
+    ("hatescore", 11108, "Apache-2.0", "hate speech / plain abuse vs Clean", "comments + wiki + rule-generated", "✅ already in use"),
+    ("unsmile", 18742, "CC-BY-NC-ND", "9 hate categories + abuse/profanity", "online comments", "⚠️ hurt performance in exp-0002"),
+    ("APEACH", 11666, "CC-BY-SA-4.0", "is hate speech (crowd-generated)", "crowd-generated", "🔬 evaluated here"),
+    ("kor-hate-sentence", 36661, "CC-BY-SA-4.0", "hate vs clean", "comments (likely unsmile/kmhas lineage)", "🔬 evaluated here"),
+    ("2tle/korean-curse", 1000, "MIT", "profanity span annotation", "same sentences as 2runo", "❌ duplicate (no new data)"),
+    ("josephnam/korean_toxic", 8448, "unclear", "harmful LLM queries (safety)", "synthetic prompts", "❌ different task + unclear license"),
+    ("jigsaw (English)", 160000, "CC0", "6 toxic labels, multi-label", "wiki talk pages (English)", "🔬 reference only (language mismatch)"),
 ]
 
 
 def print_survey():
-    df = pd.DataFrame(SURVEY, columns=["데이터셋", "규모", "라이선스", "라벨 정의", "도메인", "판정"])
+    df = pd.DataFrame(SURVEY, columns=["dataset", "size", "license", "label definition", "domain", "verdict"])
     print(df.to_string(index=False))
 
 
-# ── 로더 ──────────────────────────────────────────────────────────────
+# ── loaders ──────────────────────────────────────────────────────────────
 def load_ours(split: str) -> pd.DataFrame:
-    """exp-0002의 병합 데이터 (curse + hatescore). 우리의 기준 분포."""
+    """The merged data from exp-0002 (curse + hatescore) — our own reference distribution."""
     return pd.read_csv(DATA2 / f"{split}.csv")[["text", "label"]]
 
 
@@ -67,7 +71,7 @@ def load_korhate() -> pd.DataFrame:
     rows = []
     for split in ds:
         for r in ds[split]:
-            # clean=1 이면 정상, hate=1 이면 혐오
+            # clean=1 means ordinary, hate=1 means hateful
             label = 0 if int(r["clean"]) == 1 else 1
             rows.append((normalize(r["문장"]), label))
     return pd.DataFrame(rows, columns=["text", "label"])
@@ -88,18 +92,18 @@ def load_all() -> dict[str, pd.DataFrame]:
         df = fn()
         df = df[df["text"].str.len() > 0].drop_duplicates(subset="text")
         if name != "ours(curse+hatescore)":
-            # 우리 평가셋과 겹치는 문장 제거 (누수 방지)
+            # drop sentences overlapping our own evaluation splits (no leakage)
             before = len(df)
             df = df[~df["text"].isin(ours_eval)]
             if before != len(df):
-                print(f"  [{name}] 평가셋 누수 {before - len(df)}건 제거")
+                print(f"  [{name}] removed {before - len(df)} rows leaking into our evaluation splits")
         out[name] = df.reset_index(drop=True)
-        print(f"  [{name}] {len(df)}건, 양성 {df['label'].mean():.3f}")
+        print(f"  [{name}] {len(df)} rows, positive {df['label'].mean():.3f}")
     return out
 
 
 if __name__ == "__main__":
-    print("=== exp-0008 데이터셋 조사표 ===")
+    print("=== exp-0008 dataset survey ===")
     print_survey()
-    print("\n=== 로드 결과 ===")
+    print("\n=== load results ===")
     load_all()

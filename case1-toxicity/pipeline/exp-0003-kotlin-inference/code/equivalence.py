@@ -1,8 +1,12 @@
-"""exp-0003 동치성 1 검증 + 양자화 손실 측정 + Kotlin용 테스트 벡터 생성.
+"""exp-0003: verify equivalence 1, measure the quantization loss, and emit test
+vectors for Kotlin.
 
-- 동치성 1: 참조 구현(원본 float 가중치 주입) vs fasttext 라이브러리 — val 전체 확률 최대 오차
-- 양자화 손실: int8 경로의 val F1 및 판정 일치율 (th=0.375)
-- 테스트 벡터: test set 1,000문장의 int8 확률 → Kotlin JUnit 입력
+- equivalence 1: the reference implementation (fed the original float weights)
+  against the fasttext library — the maximum probability error over all of val
+- quantization loss: val F1 along the int8 path and the decision agreement rate
+  (th=0.375)
+- test vectors: int8 probabilities for 1,000 test-set sentences, as input to the
+  Kotlin JUnit suite
 """
 import json
 import sys
@@ -25,7 +29,7 @@ def main():
     ft = fasttext.load_model(str(EXP2 / "artifacts" / "operating_point.bin"))
     ref = ZBFTModel(ART / "toxicity_model.zbft")
 
-    # 동치성 1: 원본 float 가중치 주입 (양자화 효과 배제)
+    # equivalence 1: inject the original float weights, excluding quantization effects
     ref_float = ZBFTModel(ART / "toxicity_model.zbft")
     ref_float.matrix = ft.get_input_matrix()
     ref_float.output = ft.get_output_matrix().astype(np.float32)
@@ -36,22 +40,22 @@ def main():
 
     p_ft = prob_positive(ft, texts)
     p_rf = np.array([ref_float.prob_positive(t) for t in texts])
-    # fasttext는 확률을 [0,1] 밖으로 미세하게 벗어나게 반환하기도 함 → clip 후 비교
+    # fasttext can return probabilities marginally outside [0,1], so clip before comparing
     diff_float = np.abs(np.clip(p_ft, 0, 1) - np.clip(p_rf, 0, 1))
-    print(f"동치성1 (float, n={len(texts)}): max|Δp|={diff_float.max():.2e}, mean={diff_float.mean():.2e}")
+    print(f"equivalence 1 (float, n={len(texts)}): max|Δp|={diff_float.max():.2e}, mean={diff_float.mean():.2e}")
 
     p_i8 = np.array([ref.prob_positive(t) for t in texts])
     f1_ft = f1_binary(y, (np.clip(p_ft, 0, 1) >= TH).astype(int).tolist())["f1"]
     f1_i8 = f1_binary(y, (p_i8 >= TH).astype(int).tolist())["f1"]
     agree = float(((np.clip(p_ft, 0, 1) >= TH) == (p_i8 >= TH)).mean())
-    print(f"양자화: val F1 {f1_ft:.4f} → {f1_i8:.4f} (Δ={f1_i8-f1_ft:+.4f}), 판정 일치율={agree:.4f}")
+    print(f"quantization: val F1 {f1_ft:.4f} → {f1_i8:.4f} (Δ={f1_i8-f1_ft:+.4f}), decision agreement={agree:.4f}")
 
-    # Kotlin 테스트 벡터 (test set 1,000문장, int8 참조 확률)
+    # Kotlin test vectors (1,000 test-set sentences, int8 reference probabilities)
     test = load_split("test").head(1000)
     vectors = [{"text": t, "p1": round(float(ref.prob_positive(t)), 6)} for t in test["text"]]
     out = ART / "test_vectors.json"
     out.write_text(json.dumps(vectors, ensure_ascii=False))
-    print(f"테스트 벡터 {len(vectors)}건 → {out}")
+    print(f"{len(vectors)} test vectors → {out}")
 
 
 if __name__ == "__main__":

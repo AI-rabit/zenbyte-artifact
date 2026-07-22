@@ -1,17 +1,24 @@
-"""exp-0003 Python 참조 구현: fastText supervised 추론을 ZBFT 포맷에서 재현.
+"""exp-0003 Python reference implementation: reproduces fastText supervised
+inference from the ZBFT format.
 
-fastText C++ 소스(dictionary.cc, model.cc)의 추론 경로를 그대로 따른다:
-  1. 공백 토큰화 + 문말 EOS('</s>')
-  2. in-vocab 단어: [단어 id] + char n-gram id들 / OOV 단어: char n-gram id들만
-     - char n-gram은 '<'+word+'>'에 대해 UTF-8 문자 단위로 minn..maxn
-     - EOS는 char n-gram 없음 (단어 id만)
-  3. 단어 bigram (wordNgrams=2): h = uint64(hash(w_i)) * 116049371 + hash(w_{i+1});
-     id = nwords + (h % bucket)   ※ hash는 FNV-1a 32bit, 바이트를 int8로 부호확장 후 XOR
-     ※※ 핵심 디테일: C++에서 해시가 vector<int32_t>에 저장됐다가 uint64_t로 승격되므로
-        상위비트가 1인 해시는 **부호 확장**된다 (0xFFFFFFFF........). 이를 재현해야 동치.
-  4. hidden = 모든 id 행의 평균 → softmax(output @ hidden)
+It follows the inference path of the fastText C++ sources (dictionary.cc,
+model.cc) exactly:
+  1. whitespace tokenization plus a sentence-final EOS ('</s>')
+  2. in-vocabulary word: [word id] + its char n-gram ids / OOV word: char n-gram
+     ids only
+     - char n-grams run over '<'+word+'>' by UTF-8 character, for minn..maxn
+     - EOS has no char n-grams (its word id only)
+  3. word bigrams (wordNgrams=2): h = uint64(hash(w_i)) * 116049371 + hash(w_{i+1});
+     id = nwords + (h % bucket). The hash is 32-bit FNV-1a, XOR-ing each byte
+     after sign-extending it as int8.
+     The detail that matters: in C++ the hashes are held in a vector<int32_t>
+     and then promoted to uint64_t, so any hash with its top bit set is
+     **sign-extended** (0xFFFFFFFF........). Reproducing that is what makes the
+     implementations equivalent.
+  4. hidden = the mean of all selected rows → softmax(output @ hidden)
 
-이 참조 구현이 fasttext 라이브러리와 일치해야(동치성 1) Kotlin 포팅(동치성 2)이 성립한다.
+Equivalence 2 (the Kotlin port) only holds if this reference first matches the
+fasttext library itself, which is equivalence 1.
 """
 import json
 import struct
@@ -26,7 +33,7 @@ BOW, EOW, EOS = "<", ">", "</s>"
 def fnv1a(s: str) -> int:
     h = 2166136261
     for b in s.encode("utf-8"):
-        signed = b - 256 if b > 127 else b            # int8_t 부호확장
+        signed = b - 256 if b > 127 else b            # int8_t sign extension
         h = (h ^ (signed & 0xFFFFFFFF)) & 0xFFFFFFFF
         h = (h * 16777619) & 0xFFFFFFFF
     return h
@@ -47,7 +54,8 @@ class ZBFTModel:
             for i in range(self.nwords):
                 (n,) = struct.unpack("<H", f.read(2))
                 self.vocab[f.read(n).decode("utf-8")] = i
-        # 역양자화 행렬 (참조 구현은 편의상 전체 역양자화; Kotlin은 행 단위 지연 역양자화)
+        # dequantized matrix (this reference dequantizes everything up front for
+        # convenience; the Kotlin port dequantizes lazily, row by row)
         self.matrix = q.astype(np.float32) * self.scales[:, None]
 
     def char_ngrams(self, word: str) -> list[int]:
@@ -77,7 +85,7 @@ class ZBFTModel:
                 ids.extend(self.char_ngrams(tok))
             hashes.append(fnv1a(tok))
         def sext64(u32: int) -> int:
-            """int32_t → uint64_t 부호 확장 재현 (fastText addWordNgrams와 동일)."""
+            """Reproduces the int32_t → uint64_t sign extension (as in fastText's addWordNgrams)."""
             return (u32 - (1 << 32) if u32 >= (1 << 31) else u32) & 0xFFFFFFFFFFFFFFFF
 
         for i in range(len(hashes)):                   # word n-grams
@@ -98,4 +106,4 @@ class ZBFTModel:
 if __name__ == "__main__":
     m = ZBFTModel(ART / "toxicity_model.zbft")
     for t in ("ㅅㅂ 뭐래", "좋은 아침입니다"):
-        print(t, "→ P(독성) =", round(m.prob_positive(t), 4))
+        print(t, "→ P(toxic) =", round(m.prob_positive(t), 4))
