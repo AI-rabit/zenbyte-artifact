@@ -1,11 +1,17 @@
-"""exp-0012 Phase A (1/3): Q1 게이트 + SVM 측 학습 (결정적 — 각 1회).
+"""exp-0012 Phase A (1/3): the Q1 gate plus the SVM-side training (deterministic,
+one run each).
 
-Q1: 배포 int8 ZBSV의 test 전건 확률 → F1@0.475가 exp-0011 기록치 0.8050을 재현하는지
-    게이트 확인 (±0.0005). 실패 시 즉시 중단 — 원인 규명 전 진행 금지 (spec).
-Q2: 공정 재튜닝 SVM (char_wb(2,4)/500k/C=0.5, 증류 38,019) → val pick_threshold → test 확률.
-Q3: 1차 벤치마크 SVM (char_wb(2,5)/500k/C=0.5) — 골드 / 골드+증류 각 1회 → test 확률.
+Q1: probabilities for every test row from the deployed int8 ZBSV → check that
+    F1@0.475 reproduces the 0.8050 recorded in exp-0011, within ±0.0005. On
+    failure the script stops immediately — the spec forbids continuing before
+    the cause is understood.
+Q2: the fairly re-tuned SVM (char_wb(2,4)/500k/C=0.5, distilled 38,019) →
+    pick_threshold on val → test probabilities.
+Q3: the first-benchmark SVM (char_wb(2,5)/500k/C=0.5) — gold and gold+distilled,
+    one run each → test probabilities.
 
-모든 확률 벡터·임계값·지표를 artifacts/에 저장. 분석은 analyze.py가 저장물로만 수행.
+Every probability vector, threshold and metric is saved under artifacts/. The
+analysis in analyze.py works only from those saved outputs.
 """
 import json
 
@@ -35,9 +41,9 @@ def q1_gate(test, results):
           f"R={m['recall']:.4f}) @ th={th}")
     delta = abs(m["f1"] - GATE_F1)
     if delta > GATE_TOL:
-        raise SystemExit(f"[Q1 게이트 실패] |{m['f1']:.4f} - {GATE_F1}| = {delta:.4f} > "
-                         f"{GATE_TOL} — 원인 규명 전 진행 중단 (spec)")
-    print(f"[Q1] 게이트 통과 (Δ={delta:.4f})")
+        raise SystemExit(f"[Q1 gate failed] |{m['f1']:.4f} - {GATE_F1}| = {delta:.4f} > "
+                         f"{GATE_TOL} — stopping before the cause is understood (spec)")
+    print(f"[Q1] gate passed (Δ={delta:.4f})")
 
 
 def fit_svm(vec_kw, tr, val, test, tag, results):
@@ -63,13 +69,13 @@ def main():
     results = {}
 
     q1_gate(test, results)
-    fit_svm(SVM_Q2_VEC, dist, val, test, "q2_svm", results)          # 기대 ≈ 0.8034
-    fit_svm(SVM_Q3_VEC, gold, val, test, "q3_svm_gold", results)     # 기대 ≈ 0.732
-    fit_svm(SVM_Q3_VEC, dist, val, test, "q3_svm_dist", results)     # 기대 ≈ 0.805
+    fit_svm(SVM_Q2_VEC, dist, val, test, "q2_svm", results)          # expected ≈ 0.8034
+    fit_svm(SVM_Q3_VEC, gold, val, test, "q3_svm_gold", results)     # expected ≈ 0.732
+    fit_svm(SVM_Q3_VEC, dist, val, test, "q3_svm_dist", results)     # expected ≈ 0.805
 
     with open(ART / "svm_results.json", "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
-    print("→ artifacts/svm_results.json 저장 완료")
+    print("→ saved artifacts/svm_results.json")
 
 
 if __name__ == "__main__":

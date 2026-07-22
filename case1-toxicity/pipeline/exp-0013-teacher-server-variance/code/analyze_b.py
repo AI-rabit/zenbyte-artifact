@@ -1,4 +1,5 @@
-"""exp-0013 Phase B 분석: teachers.csv + cascade.csv → Q5~Q7 판정 (spec 기준 기계 적용)."""
+"""exp-0013 Phase B analysis: teachers.csv + cascade.csv → verdicts for Q5–Q7,
+applying the spec's decision rules mechanically."""
 import csv
 import json
 
@@ -8,11 +9,12 @@ from common13 import ART, TEACHER_SEEDS
 
 
 def read_cascade():
-    """cascade.csv는 역할별로 열 수가 다르다(append_csv가 첫 행 키로 헤더 고정) — 위치 기반 파싱.
+    """cascade.csv has a different column count per role, because append_csv fixes
+    the header from the first row's keys — so it is parsed positionally.
 
-    gold-only     : seed, role, th, val_f1, precision, recall, f1
-    student_svm   : seed, role, n_train, th, val_f1, precision, recall, f1
-    student_fasttext: 위 + final_lr
+    gold-only       : seed, role, th, val_f1, precision, recall, f1
+    student_svm     : seed, role, n_train, th, val_f1, precision, recall, f1
+    student_fasttext: the above plus final_lr
     """
     rows = []
     with open(ART / "cascade.csv", encoding="utf-8") as f:
@@ -29,30 +31,30 @@ def read_cascade():
 def main():
     teachers = pd.read_csv(ART / "teachers.csv")
     cascade = read_cascade()
-    assert list(teachers["seed"]) == TEACHER_SEEDS, "교사 seed 수/순서 ≠ 계획"
+    assert list(teachers["seed"]) == TEACHER_SEEDS, "teacher seed count/order ≠ planned"
 
     gold = cascade[cascade["seed"] == "gold-only"].iloc[0]
     svm = cascade[cascade["role"] == "student_svm"].query("seed != 'gold-only'")
     ft = cascade[cascade["role"] == "student_fasttext"]
-    assert len(svm) == len(ft) == len(TEACHER_SEEDS), "캐스케이드 행 수 ≠ 계획"
+    assert len(svm) == len(ft) == len(TEACHER_SEEDS), "cascade row count ≠ planned"
 
     out = {"seeds": TEACHER_SEEDS, "gold_only_f1": round(float(gold["f1"]), 4)}
 
     tf1 = teachers["test_f1"]
     out["Q5_teacher_ceiling"] = {
-        "원기록": 0.853,
+        "originally_recorded": 0.853,
         "per_seed": {int(s): round(float(v), 4) for s, v in zip(teachers["seed"], tf1)},
         "mean": round(float(tf1.mean()), 4),
         "range": [round(float(tf1.min()), 4), round(float(tf1.max()), 4)],
-        "판정": "판정 없음 (참조선 분산 보고)"}
+        "verdict": "no verdict (the variance of a reference point is reported, not tested)"}
 
     gains = {int(s): round(float(f) - float(gold["f1"]), 4)
              for s, f in zip(svm["seed"], svm["f1"])}
     out["Q6_distill_gain_by_teacher"] = {
         "per_seed_gain": gains,
         "per_seed_f1": {int(s): round(float(f), 4) for s, f in zip(svm["seed"], svm["f1"])},
-        "판정": "유지" if all(g > 0 for g in gains.values()) else
-                ("기각" if all(g <= 0 for g in gains.values()) else "약화")}
+        "verdict": "supported" if all(g > 0 for g in gains.values()) else
+                ("rejected" if all(g <= 0 for g in gains.values()) else "weakened")}
 
     svm_f1 = {int(s): float(f) for s, f in zip(svm["seed"], svm["f1"])}
     ft_f1 = {int(s): float(f) for s, f in zip(ft["seed"], ft["f1"])}
@@ -61,12 +63,14 @@ def main():
         "svm": {s: round(v, 4) for s, v in svm_f1.items()},
         "fasttext": {s: round(v, 4) for s, v in ft_f1.items()},
         "margin": margins,
-        "판정": "유지" if all(m > 0 for m in margins.values()) else
-                ("기각" if all(m <= 0 for m in margins.values()) else "약화")}
+        "verdict": "supported" if all(m > 0 for m in margins.values()) else
+                ("rejected" if all(m <= 0 for m in margins.values()) else "weakened")}
 
-    # ── 보조 (판정 외, 사후 기술 통계임을 명시): seed별 표본 불확실성 ──
-    # margin이 test 표본 잡음 대비 어느 수준인지 보이기 위한 paired bootstrap.
-    # 판정은 위의 사전 등록 기준(3/3 방향)만으로 이미 내려졌고, 이 절은 판정을 바꾸지 않는다.
+    # ── Auxiliary (outside the verdict; explicitly post-hoc descriptive statistics):
+    #    per-seed sampling uncertainty.
+    # A paired bootstrap, to show how the margin compares with test-sample noise.
+    # The verdicts above were already decided by the pre-registered rule alone
+    # (3/3 in the same direction); nothing in this section changes them.
     import numpy as np
     from common import load_split
     test = load_split("test")
@@ -91,18 +95,18 @@ def main():
         b_svm = f1_boot(preds(f"student_seed{s}", th_of[(str(s), "student_svm")]))
         b_ft = f1_boot(preds(f"ft_seed{s}", th_of[(str(s), "student_fasttext")]))
         gain = b_svm - b_gold
-        aux[s] = {"Q6 이득 CI95": [round(float(np.percentile(gain, 2.5)), 4),
+        aux[s] = {"Q6_gain_ci95": [round(float(np.percentile(gain, 2.5)), 4),
                                     round(float(np.percentile(gain, 97.5)), 4)],
-                  "Q7 SVM>ft 우세율": round(float((b_svm > b_ft).mean()), 4)}
-    out["보조_paired_bootstrap(판정외)"] = aux
+                  "Q7_svm_beats_ft_rate": round(float((b_svm > b_ft).mean()), 4)}
+    out["auxiliary_paired_bootstrap_outside_verdict"] = aux
 
-    # 재현 게이트 (seed 42, ±0.01 — 초과 시 중단 아닌 기록)
+    # reproduction gate (seed 42, ±0.01 — exceeding it is recorded, not fatal)
     t42 = teachers[teachers["seed"] == 42].iloc[0]
     s42 = svm_f1[42]
-    out["재현_게이트_seed42"] = {
-        "교사 val (기록 0.858)": round(float(t42["val_f1"]), 4),
-        "학생 test (기록 0.8034)": round(s42, 4),
-        "±0.01 내": bool(abs(t42["val_f1"] - 0.858) <= 0.01 and abs(s42 - 0.8034) <= 0.01)}
+    out["reproduction_gate_seed42"] = {
+        "teacher_val_recorded_0.858": round(float(t42["val_f1"]), 4),
+        "student_test_recorded_0.8034": round(s42, 4),
+        "within_0.01": bool(abs(t42["val_f1"] - 0.858) <= 0.01 and abs(s42 - 0.8034) <= 0.01)}
 
     with open(ART / "analysis_b.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)

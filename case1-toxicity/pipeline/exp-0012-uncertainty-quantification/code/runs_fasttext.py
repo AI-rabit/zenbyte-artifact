@@ -1,15 +1,22 @@
-"""exp-0012 Phase A (2/3): fastText 반복 학습 — 총 71런, 사전 고정 (spec).
+"""exp-0012 Phase A (2/3): repeated fastText training — 71 runs in total, fixed
+in advance by the spec.
 
-  Q2 : 공정 재튜닝 설정(dim16/bucket250k/n(2,4)), 증류 데이터 — R=10
-  Q3g: OP(dim16/bucket500k/n(2,5)), 골드 — R=10
-  Q3d: OP, 골드+증류 — R=10                (exp-0009 final_eval과 동일 프로토콜)
-  Q4 : OP, 귀인 4팔(A/E/D/C0.9) × R=10, val best_f1 (distill.py 프로토콜, 학생 라벨 1회 생성)
+  Q2 : the fairly re-tuned configuration (dim16/bucket250k/n(2,4)), distilled
+       data — R=10
+  Q3g: OP (dim16/bucket500k/n(2,5)), gold — R=10
+  Q3d: OP, gold+distilled — R=10           (the same protocol as exp-0009 final_eval)
+  Q4 : OP, the four attribution arms (A/E/D/C0.9) × R=10, val best_f1
+       (the distill.py protocol; the student labels are generated once)
 
-실행 구조 (2026-07-18 수정): 같은 프로세스에서 학습을 반복하면 NaN이 지속 발생하는
-현상이 관측되어(1차 실행: run0·run1 성공 → run2가 lr 반감 6회 전부 NaN), **런마다
-ft_worker.py를 새 프로세스로 격리** 실행한다. 워커 내부의 train_with_retry(6회, lr 반감)가
-전부 실패하면 프로세스 수준에서 최대 3회 재시작하며, 모든 재시작 횟수를 기록한다.
-1차 실행의 부분 산출물은 runs_q2_ft.aborted-inprocess.csv로 보존(삭제 아님 — 무선별 보고).
+Execution structure (revised 2026-07-18): repeating training inside one process
+was observed to produce NaN persistently (in the first run: run0 and run1
+succeeded, then run2 hit NaN on all six lr halvings), so **each run is isolated
+in a fresh ft_worker.py process**. If the worker's own train_with_retry (6
+attempts, halving lr) fails outright, the process is restarted up to 3 times,
+and every restart count is recorded.
+The partial output of that first execution is preserved as
+runs_q2_ft.aborted-inprocess.csv rather than deleted — everything is reported,
+selected or not.
 """
 import json
 import subprocess
@@ -31,7 +38,7 @@ MAX_PROC_ATTEMPTS = 3
 
 
 def train_isolated(input_path: str, cfg: dict, out_prefix: str, evals: list[str]) -> dict:
-    """새 프로세스에서 1런 학습. 반환: meta(final_lr, sec, proc_attempts)."""
+    """One training run in a fresh process. Returns meta(final_lr, sec, proc_attempts)."""
     job = {"input": input_path, "cfg": cfg, "out_prefix": out_prefix, "evals": evals}
     job_path = ART / f"{out_prefix}_job.json"
     job_path.write_text(json.dumps(job), encoding="utf-8")
@@ -45,12 +52,12 @@ def train_isolated(input_path: str, cfg: dict, out_prefix: str, evals: list[str]
             job_path.unlink()
             return meta
         last = r.stderr.strip().splitlines()[-1] if r.stderr.strip() else f"exit {r.returncode}"
-        print(f"  ! {out_prefix}: 프로세스 시도 {attempt} 실패 — {last}", flush=True)
-    raise RuntimeError(f"{out_prefix}: 프로세스 {MAX_PROC_ATTEMPTS}회 전부 실패 ({last})")
+        print(f"  ! {out_prefix}: process attempt {attempt} failed — {last}", flush=True)
+    raise RuntimeError(f"{out_prefix}: all {MAX_PROC_ATTEMPTS} process attempts failed ({last})")
 
 
 def run_test_block(tag, path, cfg, yv, yt):
-    """val pick_threshold → test 적용 (test 주장의 원프로토콜). R런, 런마다 프로세스 격리."""
+    """pick_threshold on val, then applied to test — the original protocol behind the test claims. R runs, each isolated in its own process."""
     for i in range(R):
         prefix = f"{tag}_run{i}"
         meta = train_isolated(path, cfg, prefix, ["val", "test"])
@@ -68,7 +75,7 @@ def run_test_block(tag, path, cfg, yv, yt):
 
 
 def q4_arms(ours, pool, val):
-    """distill.py 프로토콜: metric = best_f1(val), 학생 라벨은 1회 생성."""
+    """The distill.py protocol: metric = best_f1(val), student labels generated once."""
     arms = {"A_baseline": ours}
 
     e_df = pd.concat([ours, pool[["text", "orig_label"]].rename(columns={"orig_label": "label"})],
@@ -78,10 +85,12 @@ def q4_arms(ours, pool, val):
     sp_path = ART / "q4_student_val_pool_probs.npy"
     if sp_path.exists():
         sp = np.load(sp_path)
-        print("[Q4] 학생 라벨 재사용 (기존 생성분)", flush=True)
+        print("[Q4] reusing the previously generated student labels", flush=True)
     else:
-        # 학생 라벨 생성도 격리 프로세스로: 풀 텍스트를 임시 split처럼 다룰 수 없으므로
-        # 워커 대신 여기서 직접 1회 학습한다 (프로세스 첫 학습이므로 오염 없음).
+        # Generating the student labels would also want process isolation, but the
+        # pool text cannot be passed as a temporary split, so a single training run
+        # happens here instead of in the worker. Being this process's first
+        # training, it is not affected by the contamination described above.
         from common import train_with_retry  # noqa: E402
         from transfer_matrix import prob_pos  # noqa: E402
         path = write_ft(ours[["text", "label"]], DATA / "q4_student_teacher.txt")
@@ -89,7 +98,7 @@ def q4_arms(ours, pool, val):
                                      loss="softmax", thread=1, verbose=0, **FT_OP_CFG)
         sp = prob_pos(model, pool["text"])
         np.save(sp_path, sp)
-        print(f"[Q4] 학생 라벨 생성 완료 (lr={lr})", flush=True)
+        print(f"[Q4] student labels generated (lr={lr})", flush=True)
     d_df = pd.concat([ours, pd.DataFrame({"text": pool["text"],
                                           "label": (sp >= 0.5).astype(int)})], ignore_index=True)
     arms["D_selftrain"] = d_df
@@ -136,7 +145,7 @@ def main():
         pool = pd.read_csv(EXP9_ART / "pseudo_labels.csv")
         q4_arms(ours, pool, val)
 
-    print("→ fastText 전 런 완료", flush=True)
+    print("→ all fastText runs complete", flush=True)
 
 
 if __name__ == "__main__":

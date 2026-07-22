@@ -1,12 +1,15 @@
-"""exp-0012: fastText 1런 워커 — 런마다 새 프로세스로 격리 실행된다.
+"""exp-0012: a single-run fastText worker, executed in a fresh process per run
+so that runs stay isolated.
 
-배경: 같은 프로세스에서 학습을 반복하면 어느 시점부터 NaN이 지속 발생하는 현상 관측
-(run0·run1 성공 후 run2가 lr 반감 6회 전부 NaN — 프로세스 상태 오염 의심).
-워커는 JSON 잡 파일 하나를 받아 1회 학습(train_with_retry 포함)하고 확률 벡터를 저장한다.
+Background: repeating training inside one process was observed to start
+producing NaN persistently from some point on (run0 and run1 succeeded, then
+run2 hit NaN on all six lr halvings — process state contamination is suspected).
+The worker takes one JSON job file, performs a single training run (including
+train_with_retry) and saves the probability vectors.
 
 usage: python ft_worker.py <job.json>
-job = {"input": str, "cfg": {...}, "out_prefix": str, "evals": ["val","test"] 부분집합}
-출력: {out_prefix}_{eval}_probs.npy + {out_prefix}_meta.json (final_lr, sec)
+job = {"input": str, "cfg": {...}, "out_prefix": str, "evals": a subset of ["val","test"]}
+output: {out_prefix}_{eval}_probs.npy + {out_prefix}_meta.json (final_lr, sec)
 """
 import json
 import sys

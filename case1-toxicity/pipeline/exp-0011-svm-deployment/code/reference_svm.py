@@ -1,18 +1,22 @@
-"""exp-0011 2단계: ZBSV 참조 구현 (Python) — sklearn 파이프라인을 재현.
+"""exp-0011 stage 2: the ZBSV reference implementation in Python, reproducing
+the sklearn pipeline.
 
-재현 대상 (sklearn 소스 기준):
+What is reproduced (following the sklearn sources):
   1. preprocess: lowercase → text.lower()
-  2. _white_spaces = re.compile(r"\\s\\s+") 로 **2개 이상 연속 공백만** 단일 공백으로 치환
-  3. split() 로 단어 분리, 각 단어를 " "+w+" " 로 패딩
-  4. n = minN..maxN 에 대해 슬라이딩 윈도우로 char n-gram 추출.
-     단, 패딩된 단어가 n보다 짧으면(offset==0인 채로 while 미진입) 전체를 1회만 넣고 **n 루프 종료**
-  5. CountVectorizer: 어휘에 있는 n-gram의 등장 횟수
+  2. _white_spaces = re.compile(r"\\s\\s+") collapses **only runs of two or more**
+     spaces into a single space
+  3. split() separates words, and each word is padded to " "+w+" "
+  4. for n = minN..maxN, char n-grams are taken with a sliding window.
+     If the padded word is shorter than n (offset stays 0 and the while loop is
+     never entered), the whole word is counted once and the **n loop ends**
+  5. CountVectorizer: the occurrence count of each in-vocabulary n-gram
   6. sublinear_tf: tf = 1 + ln(count)
-  7. idf 곱 (smooth_idf, 벡터라이저에서 학습된 값)
-  8. L2 정규화
-  9. LinearSVC: decision = w·x + b, 확률화는 sigmoid(decision)
+  7. multiply by idf (smooth_idf, as learned by the vectorizer)
+  8. L2 normalization
+  9. LinearSVC: decision = w·x + b, turned into a probability by sigmoid(decision)
 
-이 참조가 sklearn과 일치해야(동치성 1) Kotlin 포팅(동치성 2)이 성립한다.
+Equivalence 2 (the Kotlin port) only holds if this reference first matches
+sklearn, which is equivalence 1.
 """
 import math
 import re
@@ -52,7 +56,7 @@ class ZBSVModel:
                 while offset + n < w_len:
                     offset += 1
                     out.append(w[offset:offset + n])
-                if offset == 0:  # 짧은 단어는 1회만 세고 n 루프 종료
+                if offset == 0:  # a short word is counted once and the n loop ends
                     break
         return out
 

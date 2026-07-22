@@ -1,6 +1,7 @@
-"""exp-0011 3단계: 동치성 1 (Python 참조 vs sklearn) + 양자화 손실 + Kotlin 테스트 벡터.
+"""exp-0011 stage 3: equivalence 1 (Python reference vs sklearn), the
+quantization loss, and the Kotlin test vectors.
 
-exp-0003과 동일한 검증 절차를 SVM 경로에 적용한다.
+The same verification procedure as exp-0003, applied to the SVM path.
 """
 import json
 import sys
@@ -21,7 +22,7 @@ from reference_svm import ART, ZBSVModel  # noqa: E402
 
 
 def main():
-    vec, clf = train()  # 동일 시드·동일 설정이므로 export와 같은 모델
+    vec, clf = train()  # same seed and settings, so this is the model export produced
     ref = ZBSVModel(ART / "toxicity_model.zbsv")
     th = ref.threshold
 
@@ -29,27 +30,28 @@ def main():
     texts = val["text"].tolist()
     y = val["label"].tolist()
 
-    # 동치성 1-a: float 계수로 참조 구현 vs sklearn (양자화 효과 배제)
+    # equivalence 1-a: reference implementation with float coefficients vs sklearn
+    # (quantization effects excluded)
     ref_float = ZBSVModel(ART / "toxicity_model.zbsv")
     ref_float.coef = clf.coef_.ravel().astype(np.float32)
 
     p_sk = svm_decision(clf, vec.transform(texts))
     p_rf = np.array([1 / (1 + np.exp(-ref_float.decision(t))) for t in texts])
     d = np.abs(p_sk - p_rf)
-    print(f"동치성1 (float, n={len(texts)}): max|Δp| = {d.max():.2e}, mean = {d.mean():.2e}")
+    print(f"equivalence 1 (float, n={len(texts)}): max|Δp| = {d.max():.2e}, mean = {d.mean():.2e}")
 
-    # 양자화 손실
+    # quantization loss
     p_i8 = np.array([ref.prob_toxic(t) for t in texts])
     f1_sk = f1_binary(y, (p_sk >= th).astype(int).tolist())["f1"]
     f1_i8 = f1_binary(y, (p_i8 >= th).astype(int).tolist())["f1"]
     agree = float(((p_sk >= th) == (p_i8 >= th)).mean())
-    print(f"양자화: val F1 {f1_sk:.4f} → {f1_i8:.4f} (Δ={f1_i8 - f1_sk:+.4f}), 판정 일치율 {agree:.4f}")
+    print(f"quantization: val F1 {f1_sk:.4f} → {f1_i8:.4f} (Δ={f1_i8 - f1_sk:+.4f}), decision agreement {agree:.4f}")
 
-    # Kotlin 테스트 벡터 (test 1,000문장, int8 참조 확률)
+    # Kotlin test vectors (1,000 test sentences, int8 reference probabilities)
     test = load_split("test").head(1000)
     vectors = [{"text": t, "p1": round(float(ref.prob_toxic(t)), 6)} for t in test["text"]]
     (ART / "test_vectors.json").write_text(json.dumps(vectors, ensure_ascii=False))
-    print(f"테스트 벡터 {len(vectors)}건 → artifacts/test_vectors.json")
+    print(f"{len(vectors)} test vectors → artifacts/test_vectors.json")
 
 
 if __name__ == "__main__":

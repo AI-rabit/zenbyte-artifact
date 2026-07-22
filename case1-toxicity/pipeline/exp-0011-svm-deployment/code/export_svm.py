@@ -1,22 +1,24 @@
-"""exp-0011 1단계: TF-IDF(char_wb) + LinearSVM 최종 학습 → ZBSV 포맷 내보내기.
+"""exp-0011 stage 1: final training of TF-IDF(char_wb) + LinearSVM, exported to
+the ZBSV format.
 
-동작점 (exp-0010 공정 재튜닝 결과):
+Operating point (the outcome of the fair re-tuning in exp-0010):
   TfidfVectorizer(analyzer="char_wb", ngram_range=(2,4), min_df=2,
                   sublinear_tf=True, max_features=500_000)
   LinearSVC(C=0.5)
-  학습 데이터: ours(골드 11,849) + 교사 의사라벨(신뢰도 ≥0.9, 26,170) = 38,019건
+  training data: ours (gold, 11,849) + teacher pseudo-labels (confidence ≥0.9,
+                 26,170) = 38,019 rows
 
-ZBSV 포맷 v1 (little-endian):
+ZBSV format v1 (little-endian):
   magic   4B  'ZBSV'
   version u32 = 1
   minN, maxN, nTerms : u32 ×3
   sublinearTf u8, useIdf u8, pad u16
-  threshold  f32          (val에서 선택된 판정 임계값, 시그모이드 확률 기준)
+  threshold  f32          (decision threshold chosen on val, on the sigmoid probability)
   intercept  f32
-  coefScale  f32          (int8 역양자화 스케일)
+  coefScale  f32          (int8 dequantization scale)
   idf        f32 × nTerms
   coef       i8  × nTerms
-  vocab      nTerms × { u16 byteLen + utf8 bytes }   # 인덱스 순서
+  vocab      nTerms × { u16 byteLen + utf8 bytes }   # in index order
 """
 import json
 import struct
@@ -50,7 +52,7 @@ def train():
     clf = LinearSVC(**SVC_KW)
     X = vec.fit_transform(tr["text"])
     clf.fit(X, tr["label"])
-    print(f"학습: {len(tr)}건, 어휘 {len(vec.vocabulary_)} n-gram")
+    print(f"trained on {len(tr)} rows, vocabulary of {len(vec.vocabulary_)} n-grams")
     return vec, clf
 
 
@@ -66,7 +68,7 @@ def main():
     print(f"val F1 = {val_f1:.4f} (th={th:.3f})")
     print(f"test F1 = {m['f1']:.4f} (P={m['precision']:.4f} R={m['recall']:.4f})")
 
-    # ── ZBSV 직렬화 ──────────────────────────────────────────────
+    # ── ZBSV serialization ───────────────────────────────────────
     vocab = vec.vocabulary_                       # term → index
     n = len(vocab)
     terms = [None] * n
@@ -98,7 +100,7 @@ def main():
     (ART / "model_meta.json").write_text(json.dumps(meta, indent=2))
     print(json.dumps(meta, indent=2))
 
-    # 참조 검증용으로 sklearn 확률도 저장
+    # save the sklearn probabilities too, for the reference check
     np.save(ART / "sklearn_test_probs.npy", pt)
 
 

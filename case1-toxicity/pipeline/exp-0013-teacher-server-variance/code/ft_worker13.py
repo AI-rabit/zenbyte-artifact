@@ -1,7 +1,9 @@
-"""exp-0013: fastText 1런 워커 (프로세스 격리 — exp-0012 [수정 1] 승계).
+"""exp-0013: a single-run fastText worker, isolated in its own process
+(inherited from revision 1 of exp-0012).
 
 usage: python ft_worker13.py <train.txt> <out_prefix>
-설정은 Q7 고정(FT_Q2_CFG). val/test 확률을 artifacts/에 저장.
+The configuration is fixed for Q7 (FT_Q2_CFG). val/test probabilities are saved
+under artifacts/.
 """
 import json
 import sys

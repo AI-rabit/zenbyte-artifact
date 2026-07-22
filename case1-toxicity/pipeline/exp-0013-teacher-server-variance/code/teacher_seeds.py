@@ -1,12 +1,18 @@
-"""exp-0013 Phase B: 교사 seed 3종({42,43,44}) — 상한선 분산 + 캐스케이드(증류 이득의 교사-분산).
+"""exp-0013 Phase B: three teacher seeds ({42,43,44}) — variance of the ceiling,
+and the cascade (how the distillation gain varies with the teacher).
 
-seed당: 교사 학습(우리 train만, 2ep — exp-0009 레시피 그대로) → val/test 평가
-→ 풀 34,305건 재라벨(텍스트는 exp-0009 pseudo_labels.csv 그대로 — 텍스트 통제)
-→ ≥0.9 필터 → 학생 SVM(배포 동작점, 결정적) → test 평가
-→ 같은 증류 데이터로 fastText(Q7, 프로세스 격리 1런).
+Per seed: train the teacher (our train split only, 2 epochs — the exp-0009
+recipe unchanged) → evaluate on val/test
+→ relabel the 34,305-row pool (the text is exactly that of exp-0009
+  pseudo_labels.csv, so the text is held fixed)
+→ filter at ≥0.9 → student SVM (the deployed operating point, deterministic)
+  → evaluate on test
+→ fastText on the same distilled data (Q7, one run, process-isolated).
 
-골드-only 학생(char_wb(2,4), 결정적)은 공통 기준선으로 1회 학습.
-누수 assert(풀 ∩ val/test = ∅)를 재확인하고 위반 시 중단한다 (원프로토콜).
+The gold-only student (char_wb(2,4), deterministic) is trained once as the
+common baseline.
+The leakage assertions (pool ∩ val/test = ∅) are re-checked, and a violation
+stops the run, as in the original protocol.
 """
 import json
 import subprocess
@@ -83,7 +89,7 @@ def run_fasttext_isolated(train_path, prefix, val, test):
     r = subprocess.run([sys.executable, str(HERE / "ft_worker13.py"), train_path, prefix],
                        capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError(f"{prefix}: fastText 워커 실패 — {r.stderr.strip().splitlines()[-1]}")
+        raise RuntimeError(f"{prefix}: fastText worker failed — {r.stderr.strip().splitlines()[-1]}")
     pv = np.load(ART / f"{prefix}_val_probs.npy")
     th, val_f1 = pick_threshold(val["label"].tolist(), pv)
     pt = np.load(ART / f"{prefix}_test_probs.npy")
@@ -99,19 +105,19 @@ def main():
     val, test = load_split("val"), load_split("test")
     pool = pd.read_csv(EXP9_ART / "pseudo_labels.csv")[["text", "orig_label", "source"]]
 
-    # 누수 재확인 (원프로토콜의 assert 승계 — 실패 시 중단)
-    assert not pool["text"].isin(set(val["text"])).any(), "❌ 풀에 val 문장"
-    assert not pool["text"].isin(set(test["text"])).any(), "❌ 풀에 test 문장"
-    print(f"✅ 누수 재확인 통과 (풀 {len(pool)}건 ∩ val/test = ∅)", flush=True)
+    # re-check for leakage (the original protocol's assertions; failure stops the run)
+    assert not pool["text"].isin(set(val["text"])).any(), "❌ val sentences in the pool"
+    assert not pool["text"].isin(set(test["text"])).any(), "❌ test sentences in the pool"
+    print(f"✅ leakage re-check passed (pool of {len(pool)} ∩ val/test = ∅)", flush=True)
 
-    # 공통 기준선: 골드-only 학생 (결정적, 1회)
+    # common baseline: the gold-only student (deterministic, trained once)
     gold_metrics = fit_student(ours, val, test, "student_goldonly")
     append_csv(ART / "cascade.csv", {"seed": "gold-only", "role": "student_svm", **gold_metrics})
-    print(f"[기준선] 골드-only 학생 test F1={gold_metrics['f1']:.4f}", flush=True)
+    print(f"[baseline] gold-only student test F1={gold_metrics['f1']:.4f}", flush=True)
 
     for seed in TEACHER_SEEDS:
         t0 = time.time()
-        print(f"\n=== 교사 seed {seed} ===", flush=True)
+        print(f"\n=== teacher seed {seed} ===", flush=True)
         model, tok = train_teacher(ours, seed)
 
         pv = predict_probs(model, tok, val["text"].tolist())
@@ -129,8 +135,8 @@ def main():
                     **{f"test_{k}": round(v, 6) for k, v in mt.items()},
                     "pool_pos_rate": round(pos_rate, 4), "n_conf09": int(conf_mask.sum()),
                     "gpu_sec": round(time.time() - t0, 1)})
-        print(f"[교사 seed{seed}] val={tv:.4f} test F1={mt['f1']:.4f} "
-              f"양성률={pos_rate:.3f} ≥0.9통과={int(conf_mask.sum())}", flush=True)
+        print(f"[teacher seed{seed}] val={tv:.4f} test F1={mt['f1']:.4f} "
+              f"positive_rate={pos_rate:.3f} passed_0.9={int(conf_mask.sum())}", flush=True)
 
         del model
         torch.cuda.empty_cache()
@@ -141,17 +147,17 @@ def main():
         sm = fit_student(dist, val, test, f"student_seed{seed}")
         append_csv(ART / "cascade.csv", {"seed": seed, "role": "student_svm",
                                          "n_train": len(dist), **sm})
-        print(f"[학생 seed{seed}] test F1={sm['f1']:.4f} (골드-only 대비 "
+        print(f"[student seed{seed}] test F1={sm['f1']:.4f} (vs gold-only "
               f"{sm['f1'] - gold_metrics['f1']:+.4f})", flush=True)
 
         ft_path = write_ft(dist[["text", "label"]], DATA / f"ft_dist_seed{seed}.txt")
         fm = run_fasttext_isolated(str(ft_path), f"ft_seed{seed}", val, test)
         append_csv(ART / "cascade.csv", {"seed": seed, "role": "student_fasttext",
                                          "n_train": len(dist), **fm})
-        print(f"[fastText seed{seed}] test F1={fm['f1']:.4f} (SVM 대비 "
+        print(f"[fastText seed{seed}] test F1={fm['f1']:.4f} (vs SVM "
               f"{sm['f1'] - fm['f1']:+.4f})", flush=True)
 
-    print("\n→ Phase B 전 실행 완료", flush=True)
+    print("\n→ Phase B complete", flush=True)
 
 
 if __name__ == "__main__":

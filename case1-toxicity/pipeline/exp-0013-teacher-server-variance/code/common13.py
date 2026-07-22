@@ -1,4 +1,5 @@
-"""exp-0013 공용: 경로·설정. 원설정은 exp-0002/0009/0010/0011에서 그대로 승계 (변경 금지)."""
+"""exp-0013 shared paths and settings. Every setting is inherited unchanged from
+exp-0002/0009/0010/0011 and must not be modified."""
 import sys
 from pathlib import Path
 
@@ -13,14 +14,14 @@ for exp in ("exp-0002-fasttext-tradeoff", "exp-0008-dataset-survey",
 
 EXP9_ART = RESEARCH / "exp-0009-distillation" / "artifacts"
 
-TEACHER_SEEDS = [42, 43, 44]          # 사전 고정 (spec)
-TEACHER_EPOCHS = 2                    # exp-0009 teacher.py 그대로 (exp-0002 val 최고 지점)
-CONF = 0.9                            # 신뢰도 필터 (exp-0009/0011 그대로)
+TEACHER_SEEDS = [42, 43, 44]          # fixed in advance by the spec
+TEACHER_EPOCHS = 2                    # exactly as in exp-0009 teacher.py (the best point on val in exp-0002)
+CONF = 0.9                            # confidence filter, exactly as in exp-0009/0011
 
 SVM_VEC = dict(analyzer="char_wb", ngram_range=(2, 4), min_df=2,
-               sublinear_tf=True, max_features=500_000)   # 배포 동작점 (exp-0011)
+               sublinear_tf=True, max_features=500_000)   # the deployed operating point (exp-0011)
 SVC_KW = dict(C=0.5, max_iter=5000)
-FT_Q2_CFG = {"dim": 16, "bucket": 250_000, "minn": 2, "maxn": 4, "lr": 0.125}  # exp-0010 공정 재튜닝
+FT_Q2_CFG = {"dim": 16, "bucket": 250_000, "minn": 2, "maxn": 4, "lr": 0.125}  # exp-0010 fair re-tuning
 
 
 def ensure_dirs():
